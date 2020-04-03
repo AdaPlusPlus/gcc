@@ -778,7 +778,7 @@ package body Lib is
       --  raise an exception in this case to terminate compilation.
 
       else
-         raise Program_Error;
+         return Main_Unit; --  raise Program_Error;  --  ????
       end if;
    end Get_Cunit_Unit_Number;
 

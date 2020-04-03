@@ -942,7 +942,8 @@ package body Ch13 is
       --  set the flag till later, because it may turn out that we have no
       --  valid aspects in the list.
 
-      Aspects := Get_Aspect_Specifications (Semicolon);
+      Aspects := Get_Aspect_Specifications
+                   (Semicolon and then Prev_Token /= Tok_Right_Curly);
 
       --  Here if aspects present
 

@@ -238,7 +238,6 @@ package Snames is
 
    --  Some miscellaneous names used for error detection/recovery
 
-   Name_Const                          : constant Name_Id := N + $;
    Name_Error                          : constant Name_Id := N + $;
    Name_False                          : constant Name_Id := N + $;
    Name_Go                             : constant Name_Id := N + $;
@@ -1239,8 +1238,11 @@ package Snames is
    Name_Begin                            : constant Name_Id := N + $;
    Name_Body                             : constant Name_Id := N + $;
    Name_Case                             : constant Name_Id := N + $;
+   Name_Catch                            : constant Name_Id := N + $;
+   Name_Const                            : constant Name_Id := N + $;
    Name_Constant                         : constant Name_Id := N + $;
    Name_Declare                          : constant Name_Id := N + $;
+   Name_Decl                             : constant Name_Id := N + $;
    Name_Delay                            : constant Name_Id := N + $;
    Name_Do                               : constant Name_Id := N + $;
    Name_Else                             : constant Name_Id := N + $;
@@ -1250,6 +1252,7 @@ package Snames is
    Name_Exception                        : constant Name_Id := N + $;
    Name_Exit                             : constant Name_Id := N + $;
    Name_For                              : constant Name_Id := N + $;
+   Name_Func                             : constant Name_Id := N + $;
    Name_Function                         : constant Name_Id := N + $;
    Name_Generic                          : constant Name_Id := N + $;
    Name_Goto                             : constant Name_Id := N + $;
@@ -1266,17 +1269,23 @@ package Snames is
    Name_Others                           : constant Name_Id := N + $;
    Name_Out                              : constant Name_Id := N + $;
    Name_Package                          : constant Name_Id := N + $;
+   Name_Pkg                              : constant Name_Id := N + $;
    Name_Pragma                           : constant Name_Id := N + $;
+   Name_Priv                             : constant Name_Id := N + $;
    Name_Private                          : constant Name_Id := N + $;
+   Name_Proc                             : constant Name_Id := N + $;
    Name_Procedure                        : constant Name_Id := N + $;
    Name_Raise                            : constant Name_Id := N + $;
+   Name_Rec                              : constant Name_Id := N + $;
    Name_Record                           : constant Name_Id := N + $;
    Name_Rem                              : constant Name_Id := N + $;
    Name_Renames                          : constant Name_Id := N + $;
+   Name_Ret                              : constant Name_Id := N + $;
    Name_Return                           : constant Name_Id := N + $;
    Name_Reverse                          : constant Name_Id := N + $;
    Name_Select                           : constant Name_Id := N + $;
    Name_Separate                         : constant Name_Id := N + $;
+   Name_Subt                             : constant Name_Id := N + $;
    Name_Subtype                          : constant Name_Id := N + $;
    Name_Task                             : constant Name_Id := N + $;
    Name_Terminate                        : constant Name_Id := N + $;

@@ -429,7 +429,7 @@ package body Stylesw is
                Style_Check_Max_Line_Length       := Style_Max_Line_Length /= 0;
 
             when 'n' =>
-               Style_Check_Standard              := True;
+               Style_Check_Standard              := False;
 
             when 'N' =>
                Reset_Style_Check_Options;

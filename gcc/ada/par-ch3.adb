@@ -4458,7 +4458,7 @@ package body Ch3 is
          --  the subprogram declaration if it falls in the expected column
          --  or to its right.
 
-         when Tok_Begin =>
+         when Tok_Begin | Tok_Left_Curly =>
             if SIS_Entry_Active and then Start_Column >= SIS_Ecol then
 
                --  Here we have the case where a BEGIN is encountered during
@@ -4534,7 +4534,7 @@ package body Ch3 is
          --  The one exception is END RECORD, which is probably left over from
          --  some other junk.
 
-         when Tok_End =>
+         when Tok_End | Tok_Right_Curly =>
             Save_Scan_State (Scan_State); -- at END
             Scan; -- past END
 

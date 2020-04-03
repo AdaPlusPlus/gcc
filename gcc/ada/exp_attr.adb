@@ -7901,10 +7901,14 @@ package body Exp_Attr is
       if Fat_Type = Standard_Short_Float then
          Fat_Pkg := RE_Attr_Short_Float;
 
-      elsif Fat_Type = Standard_Float then
+      elsif Fat_Type = Standard_Float
+        or else Fat_Type = Standard_Float_32
+      then
          Fat_Pkg := RE_Attr_Float;
 
-      elsif Fat_Type = Standard_Long_Float then
+      elsif Fat_Type = Standard_Long_Float
+        or else Fat_Type = Standard_Float_64
+      then
          Fat_Pkg := RE_Attr_Long_Float;
 
       elsif Fat_Type = Standard_Long_Long_Float then

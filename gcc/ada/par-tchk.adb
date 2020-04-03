@@ -42,6 +42,10 @@ package body Tchk is
    --  Called by T_xx routines to check for reserved keyword token. P is the
    --  position of the error message if the token is missing (see Wrong_Token)
 
+   procedure Check_Token (T1, T2 : Token_Type; P : Position);
+   pragma Inline (Check_Token);
+   --  Same as the other Check
+
    procedure Wrong_Token (T : Token_Type; P : Position);
    --  Called when scanning a reserved keyword when the keyword is not present.
    --  T is the token type for the keyword, and P indicates the position to be
@@ -59,6 +63,20 @@ package body Tchk is
          return;
       else
          Wrong_Token (T, P);
+      end if;
+   end Check_Token;
+
+   -----------------
+   -- Check_Token --
+   -----------------
+
+   procedure Check_Token (T1, T2 : Token_Type; P : Position) is
+   begin
+      if Token = T1 or else Token = T2 then
+         Scan;
+         return;
+      else
+         Wrong_Token (T1, P);
       end if;
    end Check_Token;
 
@@ -273,7 +291,7 @@ package body Tchk is
 
       --  If we have IS scan past it
 
-      if Token = Tok_Is then
+      if Token = Tok_Is or else Token = Tok_Colon then
          Scan;
 
          --  And ignore any following semicolons
@@ -335,7 +353,7 @@ package body Tchk is
            ("LOOP expected");
          Scan;
       else
-         Check_Token (Tok_Loop, AP);
+         Check_Token (Tok_Loop, Tok_Left_Curly, AP);
       end if;
    end T_Loop;
 
@@ -495,7 +513,7 @@ package body Tchk is
 
    procedure T_Then is
    begin
-      Check_Token (Tok_Then, AP);
+      Check_Token (Tok_Then, Tok_Left_Curly, AP);
    end T_Then;
 
    ------------

@@ -2500,6 +2500,7 @@ package body Ch4 is
 
       if not Token_Is_At_Start_Of_Line
          and then Token not in Token_Class_Sterm
+         and then Token /= Tok_Left_Curly
       then
          --  Normally the right error message is indeed that we expected a
          --  binary operator, but in the case of being between a right and left

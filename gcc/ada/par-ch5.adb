@@ -295,7 +295,8 @@ package body Ch5 is
                     and then Prev_Token /= Tok_Null
                     and then Prev_Token /= Tok_Raise
                     and then Prev_Token /= Tok_End
-                    and then Prev_Token /= Tok_Exit)
+                    and then Prev_Token /= Tok_Exit
+                    and then Prev_Token /= Tok_Right_Curly)
 
                   --  If followed by colon, colon-equal, or dot, then we
                   --  definitely  have an identifier (could not be reserved)
@@ -315,6 +316,7 @@ package body Ch5 is
                       and then Prev_Token /= Tok_If
                       and then Prev_Token /= Tok_Elsif
                       and then Prev_Token /= Tok_Return
+                      and then Prev_Token /= Tok_Right_Curly
                       and then Prev_Token /= Tok_When
                       and then Prev_Token /= Tok_While
                       and then Prev_Token /= Tok_Separate)
@@ -344,6 +346,7 @@ package body Ch5 is
 
                when Tok_End
                   | Tok_EOF
+                  | Tok_Right_Curly
                =>
                   --  These tokens always terminate the statement sequence
 
@@ -522,7 +525,8 @@ package body Ch5 is
                         Token = Tok_For     or else
                         Token = Tok_While   or else
                         Token = Tok_Declare or else
-                        Token = Tok_Begin
+                        Token = Tok_Begin   or else
+                        Token = Tok_Left_Curly
                      then
                         Suspicious_Labels.Append
                           ((Proc_Call     => Id_Node,
@@ -612,7 +616,9 @@ package body Ch5 is
                      --  Begin statement (labeled block statement with no
                      --  DECLARE part)
 
-                     elsif Token = Tok_Begin then
+                     elsif Token = Tok_Begin
+                       or else Token = Tok_Left_Curly
+                     then
                         Append_To (Statement_List,
                           P_Begin_Statement (Id_Node));
 
@@ -842,7 +848,7 @@ package body Ch5 is
 
                --  Begin_Statement (Block_Statement with no declare, no label)
 
-               when Tok_Begin =>
+               when Tok_Begin | Tok_Left_Curly =>
                   Check_Bad_Layout;
                   Append_To (Statement_List, P_Begin_Statement);
                   Statement_Required := False;
@@ -1378,7 +1384,7 @@ package body Ch5 is
          --  If we have an END, then probably we are at the end of the case
          --  but we only exit if Check_End thinks the END was reasonable.
 
-         elsif Token = Tok_End then
+         elsif Token = Tok_End or else Token = Tok_Right_Curly then
             exit when Check_End;
 
          --  Here if token is other than WHEN, OTHERS or END. We definitely
@@ -2149,7 +2155,7 @@ package body Ch5 is
       else
          Set_Declarations (Parent, Decls);
 
-         if Token = Tok_Begin then
+         if Token = Tok_Begin or else Token = Tok_Left_Curly then
             if Style_Check then
                Style.Check_Indentation;
             end if;
@@ -2182,7 +2188,8 @@ package body Ch5 is
             --  the suspicion, and do not require a BEGIN to be present
 
             if Parent_Nkind = N_Subprogram_Body
-              and then Token  = Tok_End
+              and then (Token = Tok_End
+                         or else Token = Tok_Right_Curly)
               and then Scopes (Scope.Last).Etyp = E_Suspicious_Is
             then
                Scopes (Scope.Last).Etyp := E_Bad_Is;
@@ -2199,6 +2206,7 @@ package body Ch5 is
 
             elsif Parent_Nkind = N_Package_Body
               and then (Token = Tok_End
+                          or else Token = Tok_Right_Curly
                           or else Token = Tok_EOF
                           or else Token in Token_Class_Declk)
             then
@@ -2249,7 +2257,8 @@ package body Ch5 is
                --  swallowed a lone statement into the declarative part.
 
                if Missing_Begin_Msg /= No_Error_Msg
-                 and then Token = Tok_End
+                 and then (Token = Tok_End
+                            or else Token = Tok_Right_Curly)
                then
                   null;
                else

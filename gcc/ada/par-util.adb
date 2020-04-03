@@ -39,6 +39,9 @@ package body Util is
    ---------------------
 
    function Bad_Spelling_Of (T : Token_Type) return Boolean is
+
+      pragma Warnings (Off); --  Unused variables
+
       Tname : constant String := Token_Type'Image (T);
       --  Characters of token name
 
@@ -55,6 +58,8 @@ package body Util is
 
       SL : constant Natural := S'Length;
       --  Length of expected token name excluding TOK_ at start
+
+      pragma Warnings (On);
 
    begin
       if Token /= Tok_Identifier then
@@ -117,14 +122,14 @@ package body Util is
       end if;
 
       if Is_Bad_Spelling_Of (Name_Buffer (1 .. Name_Len), S) then
-         for J in 1 .. S'Last loop
-            M1 (P1 + J - 1) := Fold_Upper (S (J));
-         end loop;
+         --  for J in 1 .. S'Last loop
+         --     M1 (P1 + J - 1) := Fold_Upper (S (J));
+         --  end loop;
 
-         Error_Msg_SC -- CODFIX
-           (M1 (1 .. P1 - 1 + S'Last));
+         --  Error_Msg_SC -- CODFIX
+         --    (M1 (1 .. P1 - 1 + S'Last));
          Token := T;
-         return True;
+         return False; --  Allow abbreviations ???
 
       else
          return False;

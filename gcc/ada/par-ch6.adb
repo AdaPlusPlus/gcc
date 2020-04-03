@@ -338,12 +338,11 @@ package body Ch6 is
 
       Scopes (Scope.Last).Labl := Name_Node;
       Current_Node := Name_Node;
-      Ignore (Tok_Colon);
 
       --  Deal with generic instantiation, the one case in which we do not
       --  have a subprogram specification as part of whatever we are parsing
 
-      if Token = Tok_Is then
+      if Token = Tok_Is or else Token = Tok_Colon then
          Save_Scan_State (Scan_State); -- at the IS
          T_Is; -- checks for redundant IS
 
@@ -569,7 +568,7 @@ package body Ch6 is
 
          --  Case of IS following subprogram specification
 
-         elsif Token = Tok_Is then
+         elsif Token = Tok_Is or else Token = Tok_Colon then
             T_Is; -- ignore redundant Is's
 
             if Token_Name = Name_Abstract then

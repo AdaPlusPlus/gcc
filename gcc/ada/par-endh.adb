@@ -181,6 +181,7 @@ package body Endh is
       --  Save state at start of name if Name_On_Separate_Line is TRUE
 
       Span_Node : constant Node_Id := Scopes (Scope.Last).Node;
+      Is_Curly  : constant Boolean := Token = Tok_Right_Curly;
 
    begin
       End_Labl_Present := False;
@@ -189,7 +190,7 @@ package body Endh is
       --  Our first task is to scan out the END sequence if one is present.
       --  If none is present, signal by setting End_Type to E_Dummy.
 
-      if Token /= Tok_End then
+      if Token /= Tok_End and then Token /= Tok_Right_Curly then
          End_Type := E_Dummy;
 
       else
@@ -210,7 +211,11 @@ package body Endh is
 
          --  Cases of keywords where no label is allowed
 
-         if Token = Tok_Case then
+         if Is_Curly then
+            End_Type := E_Name;
+            End_Labl_Present := False;
+
+         elsif Token = Tok_Case then
             End_Type := E_Case;
             Scan; -- past CASE
 
@@ -396,7 +401,7 @@ package body Endh is
          --  case the aspect specifications and semicolon are handled at
          --  a higher level.
 
-         if End_Type /= E_Record then
+         if End_Type /= E_Record and then not Is_Curly then
 
             --  Scan aspect specifications
 
@@ -429,7 +434,7 @@ package body Endh is
 
             --  If no aspect specifications, must have a semicolon
 
-            elsif End_Type /= E_Record then
+            elsif End_Type /= E_Record and then not Is_Curly then
                if Token = Tok_Semicolon then
                   T_Semicolon;
 
@@ -483,6 +488,7 @@ package body Endh is
               and then Prev_Token /= Tok_Record
               and then Prev_Token /= Tok_Semicolon
               and then Token /= Tok_End
+              and then Token /= Tok_Right_Curly
               and then Token /= Tok_EOF
             loop
                Scan; -- past junk
@@ -656,6 +662,7 @@ package body Endh is
 
       else
          while Token /= Tok_End
+           and then Token /= Tok_Right_Curly
            and then Token /= Tok_EOF
            and then Token /= Tok_Semicolon
            and then not Token_Is_At_Start_Of_Line
@@ -1056,6 +1063,9 @@ package body Endh is
       --  belongs to some outer level entry in the scope stack, and thus
       --  we will NOT eat it up in matching the current expected END.
 
+      Is_Curly : constant Boolean := Prev_Token = Tok_Right_Curly;
+      --  Determine if the end token has been replaced with the optional
+      --  sytnax from Ada++ allowing curly braces.
    begin
       --  If not at END, then output END expected message
 
@@ -1145,7 +1155,9 @@ package body Endh is
             --  duplicate of this end sequence, and if so, skip it with an
             --  appropriate message.
 
-            if End_Labl_Present and then Token = Tok_End then
+            if End_Labl_Present and then
+              (Token = Tok_End or else Token = Tok_Right_Curly)
+            then
                declare
                   Scan_State : Saved_Scan_State;
                   End_Loc    : constant Source_Ptr := Token_Ptr;
@@ -1194,6 +1206,14 @@ package body Endh is
 
             Pop_Scope_Stack;
             End_Action := Accept_As_Scanned;
+            return;
+         end if;
+
+         --  If we hit a curly we are good
+
+         if Is_Curly or else Token = Tok_Right_Curly then
+            Pop_Scope_Stack;
+            End_Action := Insert_And_Accept;
             return;
          end if;
 

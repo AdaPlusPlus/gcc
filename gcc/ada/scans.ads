@@ -96,6 +96,7 @@ package Scans is
       Tok_Apostrophe,      -- '            Namext
 
       Tok_Left_Bracket,    -- [            Namest
+      Tok_Left_Curly,      -- {            Namext
       Tok_Left_Paren,      -- (            Namext, Consk
 
       Tok_Delta,           -- DELTA        Atkwd, Sterm, Consk
@@ -103,6 +104,7 @@ package Scans is
       Tok_Range,           -- RANGE        Atkwd, Sterm, Consk
 
       Tok_Right_Paren,     -- )            Sterm
+      Tok_Right_Curly,     -- }            Sterm
       Tok_Right_Bracket,   -- ]            Sterm
       Tok_Comma,           -- ,            Sterm
 

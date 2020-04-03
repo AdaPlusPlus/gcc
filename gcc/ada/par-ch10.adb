@@ -820,6 +820,9 @@ package body Ch10 is
       With_Node   : Node_Id;
       First_Flag  : Boolean;
 
+      Implicit_Use_Scan   : Saved_Scan_State;
+      Implicit_Use_Expand : Boolean;
+      Expanding_Implicit  : Boolean := False;
    begin
       Item_List := New_List;
 
@@ -832,6 +835,7 @@ package body Ch10 is
       --  Loop through context items
 
       loop
+         Implicit_Use_Expand := False;
          if Style_Check then
             Style.Check_Indentation;
          end if;
@@ -892,31 +896,40 @@ package body Ch10 is
             Has_Private := False;
          end if;
 
-         if Token = Tok_With then
-            Scan; -- past WITH
+         if Token = Tok_With or else Token = Tok_Use then
+
+            if Token = Tok_Use then
+               Save_Scan_State (Implicit_Use_Scan);
+               Implicit_Use_Expand := True;
+               Expanding_Implicit  := True;
+            end if;
+            Scan; -- past WITH/USE
 
             if Token = Tok_Type then
+               if not Implicit_Use_Expand then
 
-               --  WITH TYPE is an obsolete GNAT specific extension
+                  --  WITH TYPE is an obsolete GNAT specific extension
 
-               Error_Msg_SP ("`WITH TYPE` is an obsolete 'G'N'A'T extension");
-               Error_Msg_SP ("\use Ada 2005 `LIMITED WITH` clause instead");
+                  Error_Msg_SP
+                    ("`WITH TYPE` is an obsolete 'G'N'A'T extension");
+                  Error_Msg_SP ("\use Ada 2005 `LIMITED WITH` clause instead");
 
-               Scan;  -- past TYPE
+                  Scan;  -- past TYPE
 
-               T_Is;
+                  T_Is;
 
-               if Token = Tok_Tagged then
-                  Scan;
+                  if Token = Tok_Tagged then
+                     Scan;
 
-               elsif Token = Tok_Access then
-                  Scan;
+                  elsif Token = Tok_Access then
+                     Scan;
 
-               else
-                  Error_Msg_SC ("expect tagged or access qualifier");
+                  else
+                     Error_Msg_SC ("expect tagged or access qualifier");
+                  end if;
+
+                  TF_Semicolon;
                end if;
-
-               TF_Semicolon;
 
             else
                First_Flag := True;
@@ -941,6 +954,13 @@ package body Ch10 is
                   Set_First_Name (With_Node, First_Flag);
                   Set_Limited_Present (With_Node, Has_Limited);
                   Set_Private_Present (With_Node, Has_Private);
+
+                  --  Mark the ad hoc expansion
+
+                  if Expanding_Implicit then
+                     Set_Implicit_With (With_Node);
+                  end if;
+
                   First_Flag := False;
 
                   --  All done if no comma
@@ -967,10 +987,17 @@ package body Ch10 is
                TF_Semicolon;
             end if;
 
-         --  Processing for USE clause
+            if Implicit_Use_Expand then
+               Expanding_Implicit := False;
+               Restore_Scan_State (Implicit_Use_Scan);
+            end if;
 
-         elsif Token = Tok_Use then
-            P_Use_Clause (Item_List);
+            --  Processing for USE clause
+
+            if Token = Tok_Use then
+               Expanding_Implicit := False;
+               P_Use_Clause (Item_List);
+            end if;
 
          --  Anything else is end of context clause
 

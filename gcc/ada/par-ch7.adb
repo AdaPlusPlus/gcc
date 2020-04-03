@@ -110,6 +110,10 @@ package body Ch7 is
       Is_Sloc : Source_Ptr;
       --  Save location of IS token for package declaration
 
+      Scan_State : Saved_Scan_State;
+      --  Used to save the scan state when checking for the alternative Ada++
+      --  curly brace syntax.
+
       Dummy_Node : constant Node_Id :=
                      New_Node (N_Package_Specification, Token_Ptr);
       --  Dummy node to attach aspect specifications to until we properly
@@ -153,7 +157,13 @@ package body Ch7 is
             P_Aspect_Specifications (Dummy_Node, Semicolon => False);
          end if;
 
-         TF_Is;
+         --  Handle alternative syntax
+
+         if Token = Tok_Left_Bracket then
+            Scan;
+         else
+            TF_Is;
+         end if;
 
          if Separate_Present then
             if not Pf_Flags.Stub then
@@ -244,7 +254,18 @@ package body Ch7 is
             end if;
 
             Is_Sloc := Token_Ptr;
-            TF_Is;
+            if Token /= Tok_Left_Curly then
+               if Token = Tok_Left_Bracket then
+                  Save_Scan_State (Scan_State);
+                  Scan;
+                  if Token = Tok_New then
+                     Restore_Scan_State (Scan_State);
+                     TF_Is;
+                  end if;
+               else
+                  TF_Is;
+               end if;
+            end if;
 
             --  Case of generic instantiation
 

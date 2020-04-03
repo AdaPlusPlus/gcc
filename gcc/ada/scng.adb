@@ -183,6 +183,7 @@ package body Scng is
             | Tok_Interface
             | Tok_Is
             | Tok_Left_Bracket
+            | Tok_Left_Curly
             | Tok_Left_Paren
             | Tok_Less
             | Tok_Less_Equal
@@ -206,6 +207,7 @@ package body Scng is
             | Tok_Renames
             | Tok_Reverse
             | Tok_Right_Bracket
+            | Tok_Right_Curly
             | Tok_Right_Paren
             | Tok_Slash
             | Tok_String_Literal
@@ -327,6 +329,7 @@ package body Scng is
             | Tok_Integer_Literal
             | Tok_Is
             | Tok_Left_Bracket
+            | Tok_Left_Curly
             | Tok_Left_Paren
             | Tok_Less
             | Tok_Less_Equal
@@ -344,6 +347,7 @@ package body Scng is
             | Tok_Real_Literal
             | Tok_Rem
             | Tok_Right_Bracket
+            | Tok_Right_Curly
             | Tok_Right_Paren
             | Tok_Slash
             | Tok_String_Literal
@@ -1716,9 +1720,9 @@ package body Scng is
          --  Left brace
 
          when '{' =>
-            Error_Msg_S ("illegal character, replaced by ""(""");
+            Accumulate_Checksum ('{');
             Scan_Ptr := Scan_Ptr + 1;
-            Token := Tok_Left_Paren;
+            Token := Tok_Left_Curly;
             return;
 
          --  Comma
@@ -2181,10 +2185,17 @@ package body Scng is
 
             return;
 
+         --  Right curly
+
+         when '}' =>
+            Token := Tok_Right_Curly;
+            Scan_Ptr := Scan_Ptr + 1;
+            return;
+
          --  Right bracket or right brace, treated as right paren
          --  but proper aggregate delimiter in Ada_2020
 
-         when ']' | '}' =>
+         when ']' =>
             if Ada_Version >= Ada_2020 then
                Token := Tok_Right_Bracket;
 
@@ -2537,6 +2548,14 @@ package body Scng is
                      Scan_Ptr := Scan_Ptr + 1;
                   end if;
                end loop;
+
+            --  Ada++ Pragma
+
+            elsif Source (Scan_Ptr) = '#' then
+               Accumulate_Checksum ('#');
+               Scan_Ptr := Scan_Ptr + 1;
+               Token := Tok_Pragma;
+               return;
 
             --  Otherwise, this is an illegal character
 

@@ -55,28 +55,39 @@ package Stand is
       --  order for the purposes of ASIS traversals
 
       S_Boolean,
+      S_Bool,
 
       S_Short_Short_Integer,
       S_Short_Integer,
       S_Integer,
+      S_Int_32,
       S_Long_Integer,
+      S_Int_64,
       S_Long_Long_Integer,
 
       S_Natural,
       S_Positive,
 
       S_Short_Float,
+      S_Float_32,
       S_Float,
       S_Long_Float,
+      S_Float_64,
       S_Long_Long_Float,
 
       S_Character,
+      S_Char_8,
       S_Wide_Character,
+      S_Char_16,
       S_Wide_Wide_Character,
+      S_Char_32,
 
       S_String,
+      S_Str_8,
       S_Wide_String,
+      S_Str_16,
       S_Wide_Wide_String,
+      S_Str_32,
 
       S_Duration,
 
@@ -248,6 +259,21 @@ package Stand is
    SE : Standard_Entity_Array_Type renames Standard_Entity;
 
    Standard_Standard            : Entity_Id renames SE (S_Standard);
+
+   Standard_Bool                : Entity_Id renames SE (S_Bool);
+   Standard_Int_32              : Entity_Id renames SE (S_Int_32);
+   Standard_Int_64              : Entity_Id renames SE (S_Int_64);
+
+   Standard_Float_32            : Entity_Id renames SE (S_Float_32);
+   Standard_Float_64            : Entity_Id renames SE (S_Float_64);
+
+   Standard_Char_8              : Entity_Id renames SE (S_Char_8);
+   Standard_Char_16             : Entity_Id renames SE (S_Char_16);
+   Standard_Char_32             : Entity_Id renames SE (S_Char_32);
+
+   Standard_Str_8               : Entity_Id renames SE (S_Str_8);
+   Standard_Str_16              : Entity_Id renames SE (S_Str_16);
+   Standard_Str_32              : Entity_Id renames SE (S_Str_32);
 
    Standard_ASCII               : Entity_Id renames SE (S_ASCII);
    Standard_Character           : Entity_Id renames SE (S_Character);

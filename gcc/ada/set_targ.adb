@@ -204,11 +204,14 @@ package body Set_Targ is
    begin
       case T is
          when S_Float
+            | S_Float_32
             | S_Short_Float
          =>
             return "float";
 
-         when S_Long_Float =>
+         when S_Long_Float
+            | S_Float_64
+         =>
             return "double";
 
          when S_Long_Long_Float =>

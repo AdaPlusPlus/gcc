@@ -552,15 +552,15 @@ package body Sem_Ch10 is
                      --  |   X    |  X   |   X    |  X   |     X     |      |
                      --  +--------+------+--------+------+-----------+------+
 
-                     if (Withed_In_Spec
-                           and then not Used_Type_Or_Elab)
-                             and then
-                               ((not Used_In_Spec and then not Used_In_Body)
-                                  or else Used_In_Spec)
-                     then
-                        Error_Msg_N -- CODEFIX
-                          ("redundant with clause in body?r?", Clause);
-                     end if;
+                     --  if (Withed_In_Spec
+                     --      and then not Used_Type_Or_Elab)
+                     --        and then
+                     --          ((not Used_In_Spec and then not Used_In_Body)
+                     --             or else Used_In_Spec)
+                     --  then
+                     --   Error_Msg_N -- CODEFIX
+                     --     ("redundant with clause in body?r?", Clause);
+                     --  end if;
 
                      Used_In_Body      := False;
                      Used_In_Spec      := False;
@@ -586,10 +586,10 @@ package body Sem_Ch10 is
                         Withed       => Withed,
                         Exit_On_Self => True);
 
-                     if Withed then
-                        Error_Msg_N -- CODEFIX
-                          ("redundant with clause?r?", Clause);
-                     end if;
+                     --  if Withed then
+                     --   Error_Msg_N -- CODEFIX
+                     --     ("redundant with clause?r?", Clause);
+                     --  end if;
                   end;
                end if;
             end if;
@@ -1522,6 +1522,7 @@ package body Sem_Ch10 is
                         if Item /= It
                           and then Nkind (It) = N_With_Clause
                           and then not Limited_Present (It)
+                          and then Present (Library_Unit (It))
                           and then
                             Nkind_In (Unit (Library_Unit (It)),
                                       N_Package_Declaration,
@@ -4860,6 +4861,7 @@ package body Sem_Ch10 is
             while Present (Item) loop
                if Nkind (Item) = N_With_Clause
                  and then not Limited_Present (Item)
+                 and then Present (Library_Unit (Item))
                  and then Nkind (Unit (Library_Unit (Item))) =
                                                   N_Package_Declaration
                then

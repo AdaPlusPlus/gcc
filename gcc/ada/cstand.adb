@@ -203,9 +203,11 @@ package body CStand is
       Align : Int)
    is
    begin
-      Set_Type_Definition (Parent (E),
-        Make_Floating_Point_Definition (Stloc,
-          Digits_Expression => Make_Integer (UI_From_Int (Digs))));
+      if Nkind (Parent (E)) /= N_Subtype_Declaration then
+         Set_Type_Definition (Parent (E),
+           Make_Floating_Point_Definition (Stloc,
+             Digits_Expression => Make_Integer (UI_From_Int (Digs))));
+      end if;
 
       Set_Ekind                      (E, E_Floating_Point_Type);
       Set_Etype                      (E, E);
@@ -520,6 +522,11 @@ package body CStand is
          Copy_Float_Type
            (Standard_Long_Float,
             Find_Back_End_Float_Type (C_Type_For (S_Long_Float)));
+         Copy_Float_Type (Standard_Float_32, Standard_Short_Float);
+
+         Copy_Float_Type
+           (Standard_Float_64,
+            Find_Back_End_Float_Type (C_Type_For (S_Long_Float)));
 
          Copy_Float_Type
            (Standard_Long_Long_Float,
@@ -627,10 +634,62 @@ package body CStand is
 
          --  Subtype declaration case
 
-         if S = S_Natural or else S = S_Positive then
+         if S = S_Natural
+           or else S = S_Positive
+           or else S = S_Int_32
+         then
             Decl := New_Node (N_Subtype_Declaration, Stloc);
             Set_Subtype_Indication (Decl,
               New_Occurrence_Of (Standard_Integer, Stloc));
+
+         elsif S = S_Int_64 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Long_Integer, Stloc));
+
+         elsif S = S_Float_32 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Float, Stloc));
+
+         elsif S = S_Float_64 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Long_Float, Stloc));
+
+         elsif S = S_Char_8 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+             New_Occurrence_Of (Standard_Character, Stloc));
+
+         elsif S = S_Char_16 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Wide_Character, Stloc));
+
+         elsif S = S_Char_32 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Wide_Wide_Character, Stloc));
+
+         elsif S = S_Str_8 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_String, Stloc));
+
+         elsif S = S_Str_16 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+             New_Occurrence_Of (Standard_Wide_String, Stloc));
+
+         elsif S = S_Str_32 then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Wide_Wide_String, Stloc));
+         elsif S = S_Bool then
+            Decl := New_Node (N_Subtype_Declaration, Stloc);
+            Set_Subtype_Indication (Decl,
+              New_Occurrence_Of (Standard_Boolean, Stloc));
 
          --  Full type declaration case
 
@@ -670,6 +729,18 @@ package body CStand is
       Set_Size_Known_At_Compile_Time (Standard_Boolean);
       Set_Has_Pragma_Ordered         (Standard_Boolean);
 
+      Set_Type_Definition (Parent (Standard_Boolean), Tdef_Node);
+
+      Set_Ekind          (Standard_Bool, E_Enumeration_Subtype);
+      Set_First_Literal  (Standard_Bool, Standard_False);
+      Set_Etype          (Standard_Bool, Standard_Boolean);
+      Init_Esize         (Standard_Bool, Standard_Character_Size);
+      Init_RM_Size       (Standard_Bool, 1);
+      Set_Elem_Alignment (Standard_Bool);
+
+      Set_Is_Unsigned_Type           (Standard_Bool);
+      Set_Size_Known_At_Compile_Time (Standard_Bool);
+
       Set_Ekind           (Standard_True, E_Enumeration_Literal);
       Set_Etype           (Standard_True, Standard_Boolean);
       Set_Enumeration_Pos (Standard_True, Uint_1);
@@ -704,6 +775,7 @@ package body CStand is
       Set_Is_Static_Expression (B_Node);
       Set_High_Bound (R_Node, B_Node);
 
+      Set_Scalar_Range (Standard_Bool, R_Node);
       Set_Scalar_Range (Standard_Boolean, R_Node);
       Set_Etype (R_Node, Standard_Boolean);
       Set_Parent (R_Node, Standard_Boolean);
@@ -769,6 +841,17 @@ package body CStand is
       Set_Is_Known_Valid             (Standard_Character);
       Set_Size_Known_At_Compile_Time (Standard_Character);
 
+      Set_Ekind          (Standard_Char_8, E_Enumeration_Subtype);
+      Set_Etype          (Standard_Char_8, Standard_Character);
+      Init_Esize         (Standard_Char_8, Standard_Character_Size);
+      Init_RM_Size       (Standard_Char_8, 8);
+      Set_Elem_Alignment (Standard_Char_8);
+
+      Set_Is_Unsigned_Type           (Standard_Char_8);
+      Set_Is_Character_Type          (Standard_Char_8);
+      Set_Is_Known_Valid             (Standard_Char_8);
+      Set_Size_Known_At_Compile_Time (Standard_Char_8);
+
       --  Create the bounds for type Character
 
       R_Node := New_Node (N_Range, Stloc);
@@ -794,6 +877,7 @@ package body CStand is
       Set_High_Bound (R_Node, B_Node);
 
       Set_Scalar_Range (Standard_Character, R_Node);
+      Set_Scalar_Range (Standard_Char_8, R_Node);
       Set_Etype (R_Node, Standard_Character);
       Set_Parent (R_Node, Standard_Character);
 
@@ -814,6 +898,16 @@ package body CStand is
       Set_Is_Character_Type          (Standard_Wide_Character);
       Set_Is_Known_Valid             (Standard_Wide_Character);
       Set_Size_Known_At_Compile_Time (Standard_Wide_Character);
+
+      Set_Ekind      (Standard_Char_16, E_Enumeration_Subtype);
+      Set_Etype      (Standard_Char_16, Standard_Wide_Character);
+      Init_Size      (Standard_Char_16, Standard_Wide_Character_Size);
+
+      Set_Elem_Alignment             (Standard_Char_16);
+      Set_Is_Unsigned_Type           (Standard_Char_16);
+      Set_Is_Character_Type          (Standard_Char_16);
+      Set_Is_Known_Valid             (Standard_Char_16);
+      Set_Size_Known_At_Compile_Time (Standard_Char_16);
 
       --  Create the bounds for type Wide_Character
 
@@ -839,6 +933,7 @@ package body CStand is
       Set_Etype                (B_Node, Standard_Wide_Character);
       Set_High_Bound           (R_Node, B_Node);
 
+      Set_Scalar_Range (Standard_Char_16, R_Node);
       Set_Scalar_Range (Standard_Wide_Character, R_Node);
       Set_Etype (R_Node, Standard_Wide_Character);
       Set_Parent (R_Node, Standard_Wide_Character);
@@ -863,6 +958,20 @@ package body CStand is
       Set_Is_Known_Valid             (Standard_Wide_Wide_Character);
       Set_Size_Known_At_Compile_Time (Standard_Wide_Wide_Character);
       Set_Is_Ada_2005_Only           (Standard_Wide_Wide_Character);
+
+      Set_Ekind (Standard_Char_32, E_Enumeration_Type);
+      Set_Etype (Standard_Char_32,
+                Standard_Wide_Wide_Character);
+      Init_Size (Standard_Char_32,
+                 Standard_Wide_Wide_Character_Size);
+
+      Set_Elem_Alignment             (Standard_Char_32);
+      Set_Has_Pragma_Ordered         (Standard_Char_32);
+      Set_Is_Unsigned_Type           (Standard_Char_32);
+      Set_Is_Character_Type          (Standard_Char_32);
+      Set_Is_Known_Valid             (Standard_Char_32);
+      Set_Size_Known_At_Compile_Time (Standard_Char_32);
+      Set_Is_Ada_2005_Only           (Standard_Char_32);
 
       --  Create the bounds for type Wide_Wide_Character
 
@@ -889,6 +998,7 @@ package body CStand is
       Set_High_Bound           (R_Node, B_Node);
 
       Set_Scalar_Range (Standard_Wide_Wide_Character, R_Node);
+      Set_Scalar_Range (Standard_Char_32, R_Node);
       Set_Etype (R_Node, Standard_Wide_Wide_Character);
       Set_Parent (R_Node, Standard_Wide_Wide_Character);
 
@@ -918,6 +1028,14 @@ package body CStand is
       Set_Alignment       (Standard_String, Uint_1);
       Pack_String_Type    (Standard_String);
 
+      Set_Ekind           (Standard_Str_8, E_Array_Type);
+      Set_Etype           (Standard_Str_8, Standard_String);
+      Set_Component_Type  (Standard_Str_8, Standard_Character);
+      Set_Component_Size  (Standard_Str_8, Uint_8);
+      Init_Size_Align     (Standard_Str_8);
+      Set_Alignment       (Standard_Str_8, Uint_1);
+      Pack_String_Type    (Standard_Str_8);
+
       --  On targets where a storage unit is larger than a byte (such as AAMP),
       --  pragma Pack has a real effect on the representation of type String,
       --  and the type must be marked as having a nonstandard representation.
@@ -931,6 +1049,7 @@ package body CStand is
 
       E_Id :=
         First (Subtype_Marks (Type_Definition (Parent (Standard_String))));
+      Set_First_Index (Standard_Str_8, E_Id);
       Set_First_Index (Standard_String, E_Id);
       Set_Entity (E_Id, Standard_Positive);
       Set_Etype (E_Id, Standard_Positive);
@@ -961,12 +1080,20 @@ package body CStand is
       Init_Size_Align     (Standard_Wide_String);
       Pack_String_Type    (Standard_Wide_String);
 
+      Set_Ekind           (Standard_Str_16, E_Array_Type);
+      Set_Etype           (Standard_Str_16, Standard_Wide_String);
+      Set_Component_Type  (Standard_Str_16, Standard_Wide_Character);
+      Set_Component_Size  (Standard_Str_16, Uint_16);
+      Init_Size_Align     (Standard_Str_16);
+      Pack_String_Type    (Standard_Str_16);
+
       --  Set index type of Wide_String
 
       E_Id :=
         First
           (Subtype_Marks (Type_Definition (Parent (Standard_Wide_String))));
       Set_First_Index (Standard_Wide_String, E_Id);
+      Set_First_Index (Standard_Str_16, E_Id);
       Set_Entity (E_Id, Standard_Positive);
       Set_Etype (E_Id, Standard_Positive);
 
@@ -999,6 +1126,16 @@ package body CStand is
       Set_Is_Ada_2005_Only (Standard_Wide_Wide_String);
       Pack_String_Type     (Standard_Wide_Wide_String);
 
+      Set_Ekind            (Standard_Str_32, E_Array_Type);
+      Set_Etype            (Standard_Str_32,
+                            Standard_Wide_Wide_String);
+      Set_Component_Type   (Standard_Str_32,
+                            Standard_Wide_Wide_Character);
+      Set_Component_Size   (Standard_Str_32, Uint_32);
+      Init_Size_Align      (Standard_Str_32);
+      Set_Is_Ada_2005_Only (Standard_Str_32);
+      Pack_String_Type     (Standard_Str_32);
+
       --  Set index type of Wide_Wide_String
 
       E_Id :=
@@ -1006,6 +1143,7 @@ package body CStand is
          (Subtype_Marks
             (Type_Definition (Parent (Standard_Wide_Wide_String))));
       Set_First_Index (Standard_Wide_Wide_String, E_Id);
+      Set_First_Index (Standard_Str_32, E_Id);
       Set_Entity (E_Id, Standard_Positive);
       Set_Etype (E_Id, Standard_Positive);
 
@@ -1039,6 +1177,34 @@ package body CStand is
          Lb  => Uint_1,
          Hb  => Intval (High_Bound (Scalar_Range (Standard_Integer))));
       Set_Is_Constrained   (Standard_Positive);
+
+      --  Setup entity for Int_32
+
+      Set_Ekind          (Standard_Int_32, E_Signed_Integer_Subtype);
+      Set_Etype          (Standard_Int_32, Base_Type (Standard_Integer));
+      Init_Esize         (Standard_Int_32, Standard_Integer_Size);
+      Init_RM_Size       (Standard_Int_32, Standard_Integer_Size - 1);
+      Set_Elem_Alignment (Standard_Int_32);
+      Set_Size_Known_At_Compile_Time
+                         (Standard_Int_32);
+      Set_Integer_Bounds (Standard_Int_32,
+        Typ => Base_Type (Standard_Integer),
+        Lb  => Intval (Low_Bound (Scalar_Range (Standard_Integer))),
+        Hb  => Intval (High_Bound (Scalar_Range (Standard_Integer))));
+
+      --  Setup entity for Int_64
+
+      Set_Ekind          (Standard_Int_64, E_Signed_Integer_Subtype);
+      Set_Etype          (Standard_Int_64, Base_Type (Standard_Long_Integer));
+      Init_Esize         (Standard_Int_64, Standard_Long_Integer_Size);
+      Init_RM_Size       (Standard_Int_64, Standard_Long_Integer_Size - 1);
+      Set_Elem_Alignment (Standard_Int_64);
+      Set_Size_Known_At_Compile_Time
+                         (Standard_Int_64);
+      Set_Integer_Bounds (Standard_Int_64,
+        Typ => Base_Type (Standard_Long_Integer),
+        Lb  => Intval (Low_Bound (Scalar_Range (Standard_Long_Integer))),
+        Hb  => Intval (High_Bound (Scalar_Range (Standard_Long_Integer))));
 
       --  Create declaration for package ASCII
 

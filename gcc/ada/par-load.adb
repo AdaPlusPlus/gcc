@@ -427,6 +427,11 @@ begin
                   Set_Acts_As_Spec (With_Cunit, True);
                   Set_Library_Unit (With_Cunit, With_Cunit);
 
+               --  Handle implicit with clause
+
+               elsif Implicit_With (With_Node) then
+                  null;
+
                --  If we couldn't find the body, or if it wasn't a body spec
                --  then we are in trouble. We make one more call to Load to
                --  require the spec. We know it will fail of course, the

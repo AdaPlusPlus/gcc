@@ -30,6 +30,7 @@
 ------------------------------------------------------------------------------
 
 with Snames; use Snames;
+with Opt;    use Opt;
 
 package body Scans is
 
@@ -59,6 +60,22 @@ package body Scans is
    --  Start of processing for Initialize_Ada_Keywords
 
    begin
+      --  Disallow alternative syntax when the sources are part of GNAT since
+      --  replacing all naming with keywords would be a nightmare.
+
+      if not GNAT_Mode then
+         Set_Reserved (Name_Catch, Tok_Exception);
+         Set_Reserved (Name_Const, Tok_Constant);
+         Set_Reserved (Name_Decl,  Tok_Declare);
+         Set_Reserved (Name_Func,  Tok_Function);
+         Set_Reserved (Name_Priv,  Tok_Private);
+         Set_Reserved (Name_Proc,  Tok_Procedure);
+         Set_Reserved (Name_Rec,   Tok_Record);
+         Set_Reserved (Name_Pkg,   Tok_Package);
+         Set_Reserved (Name_Subt,  Tok_Subtype);
+         Set_Reserved (Name_Ret,   Tok_Return);
+      end if;
+
       --  Establish reserved words
 
       Set_Reserved (Name_Abort,     Tok_Abort);
