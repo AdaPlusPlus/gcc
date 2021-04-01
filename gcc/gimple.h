@@ -1615,7 +1615,7 @@ extern alias_set_type gimple_get_alias_set (tree);
 extern bool gimple_ior_addresses_taken (bitmap, gimple *);
 extern bool gimple_builtin_call_types_compatible_p (const gimple *, tree);
 extern combined_fn gimple_call_combined_fn (const gimple *);
-extern bool gimple_call_operator_delete_p (const gcall *);
+extern bool gimple_call_replaceable_operator_delete_p (const gcall *);
 extern bool gimple_call_builtin_p (const gimple *);
 extern bool gimple_call_builtin_p (const gimple *, enum built_in_class);
 extern bool gimple_call_builtin_p (const gimple *, enum built_in_function);
@@ -1889,6 +1889,14 @@ static inline void
 gimple_set_location (gimple *g, location_t location)
 {
   g->location = location;
+}
+
+/* Return address of the location information for statement G.  */
+
+static inline location_t *
+gimple_location_ptr (gimple *g)
+{
+  return &g->location;
 }
 
 
@@ -4584,6 +4592,14 @@ static inline void
 gimple_phi_arg_set_location (gphi *phi, size_t i, location_t loc)
 {
   gimple_phi_arg (phi, i)->locus = loc;
+}
+
+/* Return address of source location of gimple argument I of phi node PHI.  */
+
+static inline location_t *
+gimple_phi_arg_location_ptr (gphi *phi, size_t i)
+{
+  return &gimple_phi_arg (phi, i)->locus;
 }
 
 /* Return TRUE if argument I of phi node PHI has a location record.  */

@@ -2868,11 +2868,15 @@ asm_clobber_reg_is_valid (int regno, int nregs, const char *regname)
      as it was before, so no asm can validly clobber the stack pointer in
      the usual sense.  Adding the stack pointer to the clobber list has
      traditionally had some undocumented and somewhat obscure side-effects.  */
-  if (overlaps_hard_reg_set_p (regset, Pmode, STACK_POINTER_REGNUM)
-      && warning (OPT_Wdeprecated, "listing the stack pointer register"
-		  " %qs in a clobber list is deprecated", regname))
-    inform (input_location, "the value of the stack pointer after an %<asm%>"
-	    " statement must be the same as it was before the statement");
+  if (overlaps_hard_reg_set_p (regset, Pmode, STACK_POINTER_REGNUM))
+    {
+      crtl->sp_is_clobbered_by_asm = true;
+      if (warning (OPT_Wdeprecated, "listing the stack pointer register"
+		   " %qs in a clobber list is deprecated", regname))
+	inform (input_location, "the value of the stack pointer after"
+		" an %<asm%> statement must be the same as it was before"
+		" the statement");
+    }
 
   return is_valid;
 }
@@ -4616,7 +4620,8 @@ expand_debug_expr (tree exp)
 	      op0 = copy_rtx (op0);
 	    if (op0 == orig_op0)
 	      op0 = shallow_copy_rtx (op0);
-	    set_mem_attributes (op0, exp, 0);
+	    if (TREE_CODE (tem) != SSA_NAME)
+	      set_mem_attributes (op0, exp, 0);
 	  }
 
 	if (known_eq (bitpos, 0) && mode == GET_MODE (op0))
@@ -5766,7 +5771,7 @@ expand_gimple_basic_block (basic_block bb, bool disable_tail_calls)
 			  && !target_for_debug_bind (var))
 			goto delink_debug_stmt;
 
-		      if (DECL_P (var))
+		      if (DECL_P (var) && !VECTOR_TYPE_P (TREE_TYPE (var)))
 			mode = DECL_MODE (var);
 		      else
 			mode = TYPE_MODE (TREE_TYPE (var));
@@ -5783,7 +5788,10 @@ expand_gimple_basic_block (basic_block bb, bool disable_tail_calls)
 
 		      value = gimple_debug_source_bind_get_value (stmt);
 
-		      mode = DECL_MODE (var);
+		      if (!VECTOR_TYPE_P (TREE_TYPE (var)))
+			mode = DECL_MODE (var);
+		      else
+			mode = TYPE_MODE (TREE_TYPE (var));
 
 		      val = gen_rtx_VAR_LOCATION (mode, var, (rtx)value,
 						  VAR_INIT_STATUS_UNINITIALIZED);

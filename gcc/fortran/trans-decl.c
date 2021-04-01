@@ -1682,15 +1682,17 @@ gfc_get_symbol_decl (gfc_symbol * sym)
 
       TREE_USED (sym->backend_decl) = 1;
       if (sym->attr.assign && GFC_DECL_ASSIGN (sym->backend_decl) == 0)
-	{
-	  gfc_add_assign_aux_vars (sym);
-	}
+	gfc_add_assign_aux_vars (sym);
 
       if (sym->ts.type == BT_CLASS && sym->backend_decl)
 	GFC_DECL_CLASS(sym->backend_decl) = 1;
 
      return sym->backend_decl;
     }
+
+  if (sym->result == sym && sym->attr.assign
+      && GFC_DECL_ASSIGN (sym->backend_decl) == 0)
+    gfc_add_assign_aux_vars (sym);
 
   if (sym->backend_decl)
     return sym->backend_decl;
@@ -1726,7 +1728,6 @@ gfc_get_symbol_decl (gfc_symbol * sym)
 	  || sym->attr.if_source != IFSRC_DECL)
 	{
 	  decl = gfc_get_extern_function_decl (sym);
-	  gfc_set_decl_location (decl, &sym->declared_at);
 	}
       else
 	{
@@ -2088,11 +2089,16 @@ gfc_get_extern_function_decl (gfc_symbol * sym, gfc_actual_arglist *actual_args)
       if (gsym && !gsym->bind_c)
 	gsym = NULL;
     }
-  else
+  else if (sym->module == NULL)
     {
       gsym = gfc_find_gsymbol (gfc_gsym_root, sym->name);
       if (gsym && gsym->bind_c)
 	gsym = NULL;
+    }
+  else
+    {
+      /* Procedure from a different module.  */
+      gsym = NULL;
     }
 
   if (gsym && !gsym->defined)
@@ -2459,7 +2465,9 @@ build_function_decl (gfc_symbol * sym, bool global)
 }
 
 
-/* Create the DECL_ARGUMENTS for a procedure.  */
+/* Create the DECL_ARGUMENTS for a procedure.
+   NOTE: The arguments added here must match the argument type created by
+   gfc_get_function_type ().  */
 
 static void
 create_function_arglist (gfc_symbol * sym)
@@ -2778,6 +2786,7 @@ create_function_arglist (gfc_symbol * sym)
 	  DECL_ARG_TYPE (token) = TREE_VALUE (typelist);
 	  TREE_READONLY (token) = 1;
 	  hidden_arglist = chainon (hidden_arglist, token);
+	  hidden_typelist = TREE_CHAIN (hidden_typelist);
 	  gfc_finish_decl (token);
 
 	  offset = build_decl (input_location, PARM_DECL,
@@ -2803,6 +2812,7 @@ create_function_arglist (gfc_symbol * sym)
 	  DECL_ARG_TYPE (offset) = TREE_VALUE (typelist);
 	  TREE_READONLY (offset) = 1;
 	  hidden_arglist = chainon (hidden_arglist, offset);
+	  hidden_typelist = TREE_CHAIN (hidden_typelist);
 	  gfc_finish_decl (offset);
 	}
 
@@ -2993,8 +3003,9 @@ build_entry_thunks (gfc_namespace * ns, bool global)
       poplevel (1, 1);
       BLOCK_SUPERCONTEXT (DECL_INITIAL (thunk_fndecl)) = thunk_fndecl;
       DECL_SAVED_TREE (thunk_fndecl)
-	= build3_v (BIND_EXPR, tmp, DECL_SAVED_TREE (thunk_fndecl),
-		    DECL_INITIAL (thunk_fndecl));
+	= fold_build3_loc (DECL_SOURCE_LOCATION (thunk_fndecl), BIND_EXPR,
+			   void_type_node, tmp, DECL_SAVED_TREE (thunk_fndecl),
+			   DECL_INITIAL (thunk_fndecl));
 
       /* Output the GENERIC tree.  */
       dump_function (TDI_original, thunk_fndecl);
@@ -3195,6 +3206,9 @@ gfc_get_fake_result_decl (gfc_symbol * sym, int parent_flag)
     parent_fake_result_decl = build_tree_list (NULL, decl);
   else
     current_fake_result_decl = build_tree_list (NULL, decl);
+
+  if (sym->attr.assign)
+    DECL_LANG_SPECIFIC (decl) = DECL_LANG_SPECIFIC (sym->backend_decl);
 
   return decl;
 }
@@ -5744,8 +5758,8 @@ generate_coarray_init (gfc_namespace * ns __attribute((unused)))
   BLOCK_SUPERCONTEXT (DECL_INITIAL (fndecl)) = fndecl;
 
   DECL_SAVED_TREE (fndecl)
-    = build3_v (BIND_EXPR, decl, DECL_SAVED_TREE (fndecl),
-                DECL_INITIAL (fndecl));
+    = fold_build3_loc (DECL_SOURCE_LOCATION (fndecl), BIND_EXPR, void_type_node,
+		       decl, DECL_SAVED_TREE (fndecl), DECL_INITIAL (fndecl));
   dump_function (TDI_original, fndecl);
 
   cfun->function_end_locus = input_location;
@@ -6072,7 +6086,7 @@ generate_local_decl (gfc_symbol * sym)
       /* Unused procedure passed as dummy argument.  */
       if (sym->attr.flavor == FL_PROCEDURE)
 	{
-	  if (!sym->attr.referenced)
+	  if (!sym->attr.referenced && !sym->attr.artificial)
 	    {
 	      if (warn_unused_dummy_argument)
 		gfc_warning (OPT_Wunused_dummy_argument,
@@ -6470,8 +6484,9 @@ create_main_function (tree fndecl)
   BLOCK_SUPERCONTEXT (DECL_INITIAL (ftn_main)) = ftn_main;
 
   DECL_SAVED_TREE (ftn_main)
-    = build3_v (BIND_EXPR, decl, DECL_SAVED_TREE (ftn_main),
-		DECL_INITIAL (ftn_main));
+    = fold_build3_loc (DECL_SOURCE_LOCATION (ftn_main), BIND_EXPR,
+		       void_type_node, decl, DECL_SAVED_TREE (ftn_main),
+		       DECL_INITIAL (ftn_main));
 
   /* Output the GENERIC tree.  */
   dump_function (TDI_original, ftn_main);
@@ -6784,7 +6799,7 @@ gfc_generate_function_code (gfc_namespace * ns)
 		 || (sym->attr.entry_master
 		     && sym->ns->entries->sym->attr.recursive);
   if ((gfc_option.rtcheck & GFC_RTCHECK_RECURSION)
-      && !is_recursive && !flag_recursive)
+      && !is_recursive && !flag_recursive && !sym->attr.artificial)
     {
       char * msg;
 
@@ -6962,8 +6977,8 @@ gfc_generate_function_code (gfc_namespace * ns)
   BLOCK_SUPERCONTEXT (DECL_INITIAL (fndecl)) = fndecl;
 
   DECL_SAVED_TREE (fndecl)
-    = build3_v (BIND_EXPR, decl, DECL_SAVED_TREE (fndecl),
-		DECL_INITIAL (fndecl));
+    = fold_build3_loc (DECL_SOURCE_LOCATION (fndecl), BIND_EXPR, void_type_node,
+		       decl, DECL_SAVED_TREE (fndecl), DECL_INITIAL (fndecl));
 
   /* Output the GENERIC tree.  */
   dump_function (TDI_original, fndecl);

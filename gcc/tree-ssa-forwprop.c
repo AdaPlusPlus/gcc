@@ -2392,6 +2392,17 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 	     some simple special cases via VEC_[UN]PACK[_FLOAT]_LO_EXPR.  */
 	  optab optab;
 	  tree halfvectype, dblvectype;
+	  enum tree_code unpack_op;
+
+	  if (!BYTES_BIG_ENDIAN)
+	    unpack_op = (FLOAT_TYPE_P (TREE_TYPE (type))
+			 ? VEC_UNPACK_FLOAT_LO_EXPR
+			 : VEC_UNPACK_LO_EXPR);
+	  else
+	    unpack_op = (FLOAT_TYPE_P (TREE_TYPE (type))
+			 ? VEC_UNPACK_FLOAT_HI_EXPR
+			 : VEC_UNPACK_HI_EXPR);
+
 	  if (CONVERT_EXPR_CODE_P (conv_code)
 	      && (2 * TYPE_PRECISION (TREE_TYPE (TREE_TYPE (orig[0])))
 		  == TYPE_PRECISION (TREE_TYPE (type)))
@@ -2401,9 +2412,11 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 	      && (dblvectype
 		  = build_vector_type (TREE_TYPE (TREE_TYPE (orig[0])),
 				       nelts * 2))
-	      && (optab = optab_for_tree_code (FLOAT_TYPE_P (TREE_TYPE (type))
-					       ? VEC_UNPACK_FLOAT_LO_EXPR
-					       : VEC_UNPACK_LO_EXPR,
+	      /* Only use it for vector modes or for vector booleans
+		 represented as scalar bitmasks.  See PR95528.  */
+	      && (VECTOR_MODE_P (TYPE_MODE (dblvectype))
+		  || VECTOR_BOOLEAN_TYPE_P (dblvectype))
+	      && (optab = optab_for_tree_code (unpack_op,
 					       dblvectype,
 					       optab_default))
 	      && (optab_handler (optab, TYPE_MODE (dblvectype))
@@ -2426,11 +2439,7 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 				    orig[0], TYPE_SIZE (dblvectype),
 				    bitsize_zero_node);
 	      gsi_insert_seq_before (gsi, stmts, GSI_SAME_STMT);
-	      gimple_assign_set_rhs_with_ops (gsi,
-					      FLOAT_TYPE_P (TREE_TYPE (type))
-					      ? VEC_UNPACK_FLOAT_LO_EXPR
-					      : VEC_UNPACK_LO_EXPR,
-					      dbl);
+	      gimple_assign_set_rhs_with_ops (gsi, unpack_op, dbl);
 	    }
 	  else if (CONVERT_EXPR_CODE_P (conv_code)
 		   && (TYPE_PRECISION (TREE_TYPE (TREE_TYPE (orig[0])))
@@ -2442,6 +2451,10 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 		   && (halfvectype
 		         = build_vector_type (TREE_TYPE (TREE_TYPE (orig[0])),
 					      nelts / 2))
+		   /* Only use it for vector modes or for vector booleans
+		      represented as scalar bitmasks.  See PR95528.  */
+		   && (VECTOR_MODE_P (TYPE_MODE (halfvectype))
+		       || VECTOR_BOOLEAN_TYPE_P (halfvectype))
 		   && (optab = optab_for_tree_code (VEC_PACK_TRUNC_EXPR,
 						    halfvectype,
 						    optab_default))
@@ -2475,7 +2488,21 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 	  orig[0] = gimple_assign_lhs (lowpart);
 	}
       if (conv_code == ERROR_MARK)
-	gimple_assign_set_rhs_from_tree (gsi, orig[0]);
+	{
+	  tree src_type = TREE_TYPE (orig[0]);
+	  if (!useless_type_conversion_p (type, src_type))
+	    {
+	      gcc_assert (known_eq (TYPE_VECTOR_SUBPARTS (type),
+				    TYPE_VECTOR_SUBPARTS (src_type))
+			  && useless_type_conversion_p (TREE_TYPE (type),
+							TREE_TYPE (src_type)));
+	      tree rhs = build1 (VIEW_CONVERT_EXPR, type, orig[0]);
+	      orig[0] = make_ssa_name (type);
+	      gassign *assign = gimple_build_assign (orig[0], rhs);
+	      gsi_insert_before (gsi, assign, GSI_SAME_STMT);
+	    }
+	  gimple_assign_set_rhs_from_tree (gsi, orig[0]);
+	}
       else
 	gimple_assign_set_rhs_with_ops (gsi, conv_code, orig[0],
 					NULL_TREE, NULL_TREE);
@@ -2598,6 +2625,14 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 			    res, TYPE_SIZE (type), bitsize_zero_node);
       if (conv_code != ERROR_MARK)
 	res = gimple_build (&stmts, conv_code, type, res);
+      else if (!useless_type_conversion_p (type, TREE_TYPE (res)))
+	{
+	  gcc_assert (known_eq (TYPE_VECTOR_SUBPARTS (type),
+				TYPE_VECTOR_SUBPARTS (perm_type))
+		      && useless_type_conversion_p (TREE_TYPE (type),
+						    TREE_TYPE (perm_type)));
+	  res = gimple_build (&stmts, VIEW_CONVERT_EXPR, type, res);
+	}
       /* Blend in the actual constant.  */
       if (converted_orig1)
 	res = gimple_build (&stmts, VEC_PERM_EXPR, type,
@@ -2741,18 +2776,18 @@ pass_forwprop::execute (function *fun)
 
 	  /* If this statement sets an SSA_NAME to an address,
 	     try to propagate the address into the uses of the SSA_NAME.  */
-	  if (code == ADDR_EXPR
-	      /* Handle pointer conversions on invariant addresses
-		 as well, as this is valid gimple.  */
-	      || (CONVERT_EXPR_CODE_P (code)
-		  && TREE_CODE (rhs) == ADDR_EXPR
-		  && POINTER_TYPE_P (TREE_TYPE (lhs))))
+	  if ((code == ADDR_EXPR
+	       /* Handle pointer conversions on invariant addresses
+		  as well, as this is valid gimple.  */
+	       || (CONVERT_EXPR_CODE_P (code)
+		   && TREE_CODE (rhs) == ADDR_EXPR
+		   && POINTER_TYPE_P (TREE_TYPE (lhs))))
+	      && TREE_CODE (TREE_OPERAND (rhs, 0)) != TARGET_MEM_REF)
 	    {
 	      tree base = get_base_address (TREE_OPERAND (rhs, 0));
 	      if ((!base
 		   || !DECL_P (base)
 		   || decl_address_invariant_p (base))
-		  && TREE_CODE (base) != TARGET_MEM_REF
 		  && !stmt_references_abnormal_ssa_name (stmt)
 		  && forward_propagate_addr_expr (lhs, rhs, true))
 		{
@@ -2815,7 +2850,8 @@ pass_forwprop::execute (function *fun)
 		    continue;
 		  if (!is_gimple_assign (use_stmt)
 		      || (gimple_assign_rhs_code (use_stmt) != REALPART_EXPR
-			  && gimple_assign_rhs_code (use_stmt) != IMAGPART_EXPR))
+			  && gimple_assign_rhs_code (use_stmt) != IMAGPART_EXPR)
+		      || TREE_OPERAND (gimple_assign_rhs1 (use_stmt), 0) != lhs)
 		    {
 		      rewrite = false;
 		      break;
@@ -2877,7 +2913,8 @@ pass_forwprop::execute (function *fun)
 		  if (is_gimple_debug (use_stmt))
 		    continue;
 		  if (!is_gimple_assign (use_stmt)
-		      || gimple_assign_rhs_code (use_stmt) != BIT_FIELD_REF)
+		      || gimple_assign_rhs_code (use_stmt) != BIT_FIELD_REF
+		      || TREE_OPERAND (gimple_assign_rhs1 (use_stmt), 0) != lhs)
 		    {
 		      rewrite = false;
 		      break;

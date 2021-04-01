@@ -1,3 +1,30 @@
+2021-02-03  Nathan Sidwell  <nathan@acm.org>
+
+	PR preprocessor/95253
+	* mkdeps.c (munge): Do not escape ':'.
+
+2020-10-05  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-09-26  Jakub Jelinek  <jakub@redhat.com>
+
+	PR bootstrap/97163
+	* lex.c (search_line_fast): Only use _ARCH_PWR8 Altivec version
+	for GCC >= 4.5.
+
+2020-07-29  Tiziano Müller  <tiziano.mueller@chem.uzh.ch>
+
+	* init.c (builtin_array): Add xref comment.
+	* traditional.c (fun_like_macro): Add HAS_INCLUDE codes.
+
+2020-07-23  Release Manager
+
+	* GCC 10.2.0 released.
+
+2020-05-07  Release Manager
+
+	* GCC 10.1.0 released.
+
 2020-02-14  Jakub Jelinek  <jakub@redhat.com>
 
 	Partially implement P1042R1: __VA_OPT__ wording clarifications

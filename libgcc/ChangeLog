@@ -1,3 +1,210 @@
+2021-03-31  Jan Hubicka  <jh@suse.cz>
+
+	* config/i386/cpuinfo.c (get_amd_cpu): Support amdfam19.
+	* config/i386/cpuinfo.h (enum processor_types): Add AMDFAM19H.
+	(enum processor_subtypes): Add AMDFAM19H_ZNVER3.
+
+2021-02-24  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	Backported from master:
+	2021-02-24  Christophe Lyon  <christophe.lyon@linaro.org>
+		    Hau Hsu  <hsuhau617@gmail.com>
+
+	PR target/99157
+	* config/arm/t-arm: Fix cmse support detection.
+
+2021-01-21  Michael Meissner  <meissner@linux.ibm.com>
+
+	* config/rs6000/t-linux (IBM128_STATIC_OBJS): Back port from
+	master (12/3/2020).  New make variable.
+	(IBM128_SHARED_OBJS): New make variable.
+	(IBM128_OBJS): New make variable.  Set all objects to use the
+	explicit IBM format, and disable gnu attributes.
+	(IBM128_CFLAGS): New make variable.
+	(gcc_s_compile): Add -mno-gnu-attribute to all shared library
+	modules.
+
+2021-01-13  Samuel Thibault  <samuel.thibault@gnu.org>
+
+	Backported from master:
+	2021-01-13  Samuel Thibault  <samuel.thibault@gnu.org>
+
+	* config/i386/gnu-unwind.h (x86_gnu_fallback_frame_state): Add the
+	posix siginfo case to struct handler_args. Detect between legacy
+	and siginfo from the second parameter, which is a small sigcode in
+	the legacy case, and a pointer in the siginfo case.
+
+2020-10-02  Sergei Trofimovich  <siarheit@google.com>
+
+	Backported from master:
+	2020-09-22  Sergei Trofimovich  <siarheit@google.com>
+
+	PR gcov-profile/96913
+	* libgcov-driver.c (write_one_data): Avoid function pointer
+	comparison in TOP streaming decision.
+
+2020-08-03  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-08-03  Jakub Jelinek  <jakub@redhat.com>
+
+	PR target/96402
+	* config/aarch64/lse.S (__aarch64_cas16_acq_rel): Use x2, x3 instead
+	of x(tmp0), x(tmp1) in STXP arguments.
+
+2020-07-23  Release Manager
+
+	* GCC 10.2.0 released.
+
+2020-07-13  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	Backported from master:
+	2020-07-13  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	PR target/94891
+	* config/aarch64/aarch64-unwind.h (MD_POST_EXTRACT_ROOT_ADDR): Remove.
+	(MD_POST_FROB_EH_HANDLER_ADDR): Remove.
+	(MD_POST_EXTRACT_FRAME_ADDR): Rename to ...
+	(MD_DEMANGLE_RETURN_ADDR): This.
+	(aarch64_post_extract_frame_addr): Rename to ...
+	(aarch64_demangle_return_addr): This.
+	(aarch64_post_frob_eh_handler_addr): Remove.
+	* unwind-dw2.c (uw_update_context): Demangle return address.
+	(uw_frob_return_addr): Remove.
+
+2020-07-13  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	Backported from master:
+	2020-07-09  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	PR target/96001
+	* config/aarch64/lse.S: Add BTI marking and related definitions,
+	and add BTI c to function entries.
+
+2020-07-13  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	Backported from master:
+	2020-07-09  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	* config/aarch64/lse.S: Add stack note.
+
+2020-06-17  Samuel Thibault  <samuel.thibault@gnu.org>
+
+	Backported from master:
+	2020-06-17  Samuel Thibault  <samuel.thibault@gnu.org>
+
+	* config.host (md_unwind_header) <i[34567]86-*-gnu*>: Set to
+	'i386/gnu-unwind.h'
+	* config/i386/gnu-unwind.h: New file.
+
+2020-05-29  Dong JianQiang  <dongjianqiang2@huawei.com>
+
+	PR gcov-profile/95332
+	* libgcov-util.c (read_gcda_file): Call gcov_magic.
+	* libgcov.h (gcov_magic): Disable GCC poison.
+
+2020-05-21  H.J. Lu  <hongjiu.lu@intel.com>
+
+	Backport from master
+	2020-05-21  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR target/95212
+	* config/i386/cpuinfo.h (processor_features): Move
+	FEATURE_AVX512VP2INTERSECT after FEATURE_AVX512BF16.
+
+2020-05-20  H.J. Lu  <hongjiu.lu@intel.com>
+
+	Backport from master
+	2020-05-20  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR target/91695
+	* config/i386/cpuinfo.c (get_available_features): Fix VPCLMULQDQ
+	check.
+
+2020-05-19  H.J. Lu  <hongjiu.lu@intel.com>
+
+	Backport from master
+	2020-05-19  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR target/95212
+	PR target/95220
+	* config/i386/cpuinfo.c (get_available_features): Fix
+	FEATURE_GFNI check.  Also check FEATURE_AVX512VP2INTERSECT.
+	* config/i386/cpuinfo.h (processor_features): Add
+	FEATURE_AVX512VP2INTERSECT.
+
+2020-05-07  Release Manager
+
+	* GCC 10.1.0 released.
+
+2020-05-06  Kyrylo Tkachov  <kyrylo.tkachov@arm.com>
+
+	* config/aarch64/lse-init.c (init_have_lse_atomics): Use __getauxval
+	instead of getauxval.
+	(AT_HWCAP): Define.
+	(HWCAP_ATOMICS): Define.
+	Guard detection on __gnu_linux__.
+
+2020-04-27  Sebastian Huber  <sebastian.huber@embedded-brains.de>
+
+	* config/rs6000/crtresfpr.S: Use .machine ppc.
+	* config/rs6000/crtresxfpr.S: Likewise.
+	* config/rs6000/crtsavfpr.S: Likewise.
+
+2020-04-21  Szabolcs Nagy  <szabolcs.nagy@arm.com>
+
+	PR target/94514
+	* config/aarch64/aarch64-unwind.h (aarch64_frob_update_context):
+	Update context->flags accroding to the frame state.
+
+2020-04-19  Uroš Bizjak  <ubizjak@gmail.com>
+
+	* config/i386/sfp-exceptions.c (__sfp_handle_exceptions) [__SSE_MATH__]:
+	Remove unneeded assignments to volatile memory.
+
+2020-04-15  Jakub Jelinek  <jakub@redhat.com>
+
+	PR target/93053
+	* configure.ac (LIBGCC_CHECK_AS_LSE): Add HAVE_AS_LSE checking.
+	* config/aarch64/lse.S: Include auto-target.h, if HAVE_AS_LSE
+	is not defined, use just .arch armv8-a.
+	(B, M, N, OPN): Define.
+	(COMMENT): New .macro.
+	(CAS, CASP, SWP, LDOP): Use .inst directive if HAVE_AS_LSE is not
+	defined.  Otherwise, move the operands right after the glue? and
+	comment out operands where the macros are used.
+	* configure: Regenerated.
+	* config.in: Regenerated.
+
+2020-04-07  Ian Lance Taylor  <iant@golang.org>
+
+	PR libgcc/94513
+	* generic-morestack.c: Give up trying to use __mmap/__munmap, use
+	syscall instead.
+
+2020-04-04  Ian Lance Taylor  <iant@golang.org>
+
+	* generic-morestack.c: Only use __mmap on glibc >= 2.26.
+
+2020-04-03  Ian Lance Taylor  <iant@golang.org>
+
+	* generic-morestack.c: On GNU/Linux use __mmap/__munmap rather
+	than mmap/munmap, to avoid hooks.
+
+2020-04-03  Jim Johnston  <jjohnst@us.ibm.com>
+
+	* config/s390/tpf-unwind.h (MIN_PATRANGE, MAX_PATRANGE)
+	(TPFRA_OFFSET): Macros removed.
+	(CP_CNF, cinfc_fast, CINFC_CMRESET, CINTFC_CMCENBKST)
+	(CINTFC_CMCENBKED, ICST_CRET, ICST_SRET, LOWCORE_PAGE3_ADDR)
+	(PG3_SKIPPING_OFFSET): New macros.
+	(__isPATrange): Use cinfc_fast for the check.
+	(__isSkipResetAddr): New function.
+	(s390_fallback_frame_state): Check for skip trace addresses. Use
+	either ICST_CRET or ICST_SRET to calculate return address
+	location.
+	(__tpf_eh_return): Handle skip trace addresses.
+
 2020-03-26  Richard Earnshaw  <rearnsha@arm.com>
 
 	PR target/94220

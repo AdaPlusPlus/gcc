@@ -1203,6 +1203,7 @@ get_expr_source_range (tree expr)
 }
 
 extern void protected_set_expr_location (tree, location_t);
+extern void protected_set_expr_location_if_unset (tree, location_t);
 
 extern tree maybe_wrap_with_location (tree, location_t);
 
@@ -2749,6 +2750,13 @@ extern void decl_value_expr_insert (tree, tree);
 /* In a FIELD_DECL, indicates this field should be bit-packed.  */
 #define DECL_PACKED(NODE) (FIELD_DECL_CHECK (NODE)->base.u.bits.packed_flag)
 
+/* In a FIELD_DECL, indicates this field should be ignored for ABI decisions
+   like passing/returning containing struct by value.
+   Set for C++17 empty base artificial FIELD_DECLs as well as
+   empty [[no_unique_address]] non-static data members.  */
+#define DECL_FIELD_ABI_IGNORED(NODE) \
+  (FIELD_DECL_CHECK (NODE)->decl_common.decl_flag_0)
+
 /* Nonzero in a FIELD_DECL means it is a bit field, and must be accessed
    specially.  */
 #define DECL_BIT_FIELD(NODE) (FIELD_DECL_CHECK (NODE)->decl_common.decl_flag_1)
@@ -3036,6 +3044,11 @@ set_function_decl_type (tree decl, function_decl_type t, bool set)
     FUNCTION_DECL_DECL_TYPE (decl) = NONE;
 }
 
+/* Nonzero in a FUNCTION_DECL means this function is a replaceable
+   function (like replaceable operators new or delete).  */
+#define DECL_IS_REPLACEABLE_OPERATOR(NODE)\
+   (FUNCTION_DECL_CHECK (NODE)->function_decl.replaceable_operator)
+
 /* Nonzero in a FUNCTION_DECL means this function should be treated as
    C++ operator new, meaning that it returns a pointer for which we
    should not use type based aliasing.  */
@@ -3043,7 +3056,7 @@ set_function_decl_type (tree decl, function_decl_type t, bool set)
   (FUNCTION_DECL_CHECK (NODE)->function_decl.decl_type == OPERATOR_NEW)
 
 #define DECL_IS_REPLACEABLE_OPERATOR_NEW_P(NODE) \
-  (DECL_IS_OPERATOR_NEW_P (NODE) && DECL_IS_MALLOC (NODE))
+  (DECL_IS_OPERATOR_NEW_P (NODE) && DECL_IS_REPLACEABLE_OPERATOR (NODE))
 
 #define DECL_SET_IS_OPERATOR_NEW(NODE, VAL) \
   set_function_decl_type (FUNCTION_DECL_CHECK (NODE), OPERATOR_NEW, VAL)
@@ -3052,6 +3065,9 @@ set_function_decl_type (tree decl, function_decl_type t, bool set)
    C++ operator delete.  */
 #define DECL_IS_OPERATOR_DELETE_P(NODE) \
   (FUNCTION_DECL_CHECK (NODE)->function_decl.decl_type == OPERATOR_DELETE)
+
+#define DECL_IS_REPLACEABLE_OPERATOR_DELETE_P(NODE) \
+  (DECL_IS_OPERATOR_DELETE_P (NODE) && DECL_IS_REPLACEABLE_OPERATOR (NODE))
 
 #define DECL_SET_IS_OPERATOR_DELETE(NODE, VAL) \
   set_function_decl_type (FUNCTION_DECL_CHECK (NODE), OPERATOR_DELETE, VAL)
@@ -4399,7 +4415,7 @@ extern tree build_one_cst (tree);
 extern tree build_minus_one_cst (tree);
 extern tree build_all_ones_cst (tree);
 extern tree build_zero_cst (tree);
-extern tree build_string (int, const char *);
+extern tree build_string (unsigned, const char * = NULL);
 extern tree build_poly_int_cst (tree, const poly_wide_int_ref &);
 extern tree build_tree_list (tree, tree CXX_MEM_STAT_INFO);
 extern tree build_tree_list_vec (const vec<tree, va_gc> * CXX_MEM_STAT_INFO);
@@ -4430,7 +4446,8 @@ extern tree build_call_expr_internal_loc_array (location_t, enum internal_fn,
 extern tree maybe_build_call_expr_loc (location_t, combined_fn, tree,
 				       int, ...);
 extern tree build_alloca_call_expr (tree, unsigned int, HOST_WIDE_INT);
-extern tree build_string_literal (int, const char *, tree = char_type_node,
+extern tree build_string_literal (unsigned, const char * = NULL,
+				  tree = char_type_node,
 				  unsigned HOST_WIDE_INT = HOST_WIDE_INT_M1U);
 
 /* Construct various nodes representing data types.  */
@@ -5215,8 +5232,8 @@ extern location_t *block_nonartificial_location (tree);
 extern location_t tree_nonartificial_location (tree);
 extern tree block_ultimate_origin (const_tree);
 extern tree get_binfo_at_offset (tree, poly_int64, tree);
-extern bool virtual_method_call_p (const_tree);
-extern tree obj_type_ref_class (const_tree ref);
+extern bool virtual_method_call_p (const_tree, bool = false);
+extern tree obj_type_ref_class (const_tree ref, bool = false);
 extern bool types_same_for_odr (const_tree type1, const_tree type2);
 extern bool contains_bitfld_component_ref_p (const_tree);
 extern bool block_may_fallthru (const_tree);
@@ -5423,6 +5440,11 @@ typedef hash_map<tree,tree,decl_tree_cache_traits> decl_tree_cache_map;
 struct type_tree_cache_traits
   : simple_cache_map_traits<tree_type_hash, tree> { };
 typedef hash_map<tree,tree,type_tree_cache_traits> type_tree_cache_map;
+
+/* Similarly to decl_tree_cache_map, but without caching.  */
+struct decl_tree_traits
+  : simple_hashmap_traits<tree_decl_hash, tree> { };
+typedef hash_map<tree,tree,decl_tree_traits> decl_tree_map;
 
 /* Initialize the abstract argument list iterator object ITER with the
    arguments from CALL_EXPR node EXP.  */

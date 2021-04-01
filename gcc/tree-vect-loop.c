@@ -2414,7 +2414,36 @@ vect_better_loop_vinfo_p (loop_vec_info new_loop_vinfo,
   poly_widest_int rel_old = (old_loop_vinfo->vec_inside_cost
 			     * poly_widest_int (new_vf));
   if (maybe_lt (rel_old, rel_new))
-    return false;
+    {
+      /* When old_loop_vinfo uses a variable vectorization factor,
+	 we know that it has a lower cost for at least one runtime VF.
+	 However, we don't know how likely that VF is.
+
+	 One option would be to compare the costs for the estimated VFs.
+	 The problem is that that can put too much pressure on the cost
+	 model.  E.g. if the estimated VF is also the lowest possible VF,
+	 and if old_loop_vinfo is 1 unit worse than new_loop_vinfo
+	 for the estimated VF, we'd then choose new_loop_vinfo even
+	 though (a) new_loop_vinfo might not actually be better than
+	 old_loop_vinfo for that VF and (b) it would be significantly
+	 worse at larger VFs.
+
+	 Here we go for a hacky compromise: pick new_loop_vinfo if it is
+	 no more expensive than old_loop_vinfo even after doubling the
+	 estimated old_loop_vinfo VF.  For all but trivial loops, this
+	 ensures that we only pick new_loop_vinfo if it is significantly
+	 better than old_loop_vinfo at the estimated VF.  */
+      if (rel_new.is_constant ())
+	return false;
+
+      HOST_WIDE_INT new_estimated_vf = estimated_poly_value (new_vf);
+      HOST_WIDE_INT old_estimated_vf = estimated_poly_value (old_vf);
+      widest_int estimated_rel_new = (new_loop_vinfo->vec_inside_cost
+				      * widest_int (old_estimated_vf));
+      widest_int estimated_rel_old = (old_loop_vinfo->vec_inside_cost
+				      * widest_int (new_estimated_vf));
+      return estimated_rel_new * 2 <= estimated_rel_old;
+    }
   if (known_lt (rel_new, rel_old))
     return true;
 
@@ -2442,6 +2471,45 @@ vect_joust_loop_vinfos (loop_vec_info new_loop_vinfo,
 		     GET_MODE_NAME (new_loop_vinfo->vector_mode),
 		     GET_MODE_NAME (old_loop_vinfo->vector_mode));
   return true;
+}
+
+/* If LOOP_VINFO is already a main loop, return it unmodified.  Otherwise
+   try to reanalyze it as a main loop.  Return the loop_vinfo on success
+   and null on failure.  */
+
+static loop_vec_info
+vect_reanalyze_as_main_loop (loop_vec_info loop_vinfo, unsigned int *n_stmts)
+{
+  if (!LOOP_VINFO_EPILOGUE_P (loop_vinfo))
+    return loop_vinfo;
+
+  if (dump_enabled_p ())
+    dump_printf_loc (MSG_NOTE, vect_location,
+		     "***** Reanalyzing as a main loop with vector mode %s\n",
+		     GET_MODE_NAME (loop_vinfo->vector_mode));
+
+  struct loop *loop = LOOP_VINFO_LOOP (loop_vinfo);
+  vec_info_shared *shared = loop_vinfo->shared;
+  opt_loop_vec_info main_loop_vinfo = vect_analyze_loop_form (loop, shared);
+  gcc_assert (main_loop_vinfo);
+
+  main_loop_vinfo->vector_mode = loop_vinfo->vector_mode;
+
+  bool fatal = false;
+  bool res = vect_analyze_loop_2 (main_loop_vinfo, fatal, n_stmts);
+  loop->aux = NULL;
+  if (!res)
+    {
+      if (dump_enabled_p ())
+	dump_printf_loc (MSG_NOTE, vect_location,
+			 "***** Failed to analyze main loop with vector"
+			 " mode %s\n",
+			 GET_MODE_NAME (loop_vinfo->vector_mode));
+      delete main_loop_vinfo;
+      return NULL;
+    }
+  LOOP_VINFO_VECTORIZABLE_P (main_loop_vinfo) = 1;
+  return main_loop_vinfo;
 }
 
 /* Function vect_analyze_loop.
@@ -2591,9 +2659,25 @@ vect_analyze_loop (class loop *loop, vec_info_shared *shared)
 	      if (vinfos.is_empty ()
 		  && vect_joust_loop_vinfos (loop_vinfo, first_loop_vinfo))
 		{
-		  delete first_loop_vinfo;
-		  first_loop_vinfo = opt_loop_vec_info::success (NULL);
-		  LOOP_VINFO_ORIG_LOOP_INFO (loop_vinfo) = NULL;
+		  loop_vec_info main_loop_vinfo
+		    = vect_reanalyze_as_main_loop (loop_vinfo, &n_stmts);
+		  if (main_loop_vinfo == loop_vinfo)
+		    {
+		      delete first_loop_vinfo;
+		      first_loop_vinfo = opt_loop_vec_info::success (NULL);
+		    }
+		  else if (main_loop_vinfo
+			   && vect_joust_loop_vinfos (main_loop_vinfo,
+						      first_loop_vinfo))
+		    {
+		      delete first_loop_vinfo;
+		      first_loop_vinfo = opt_loop_vec_info::success (NULL);
+		      delete loop_vinfo;
+		      loop_vinfo
+			= opt_loop_vec_info::success (main_loop_vinfo);
+		    }
+		  else
+		    delete main_loop_vinfo;
 		}
 	    }
 
@@ -2946,31 +3030,6 @@ pop:
 	  fail = true;
 	  break;
 	}
-      /* Check there's only a single stmt the op is used on inside
-         of the loop.  */
-      imm_use_iterator imm_iter;
-      gimple *op_use_stmt;
-      unsigned cnt = 0;
-      FOR_EACH_IMM_USE_STMT (op_use_stmt, imm_iter, op)
-	if (!is_gimple_debug (op_use_stmt)
-	    && flow_bb_inside_loop_p (loop, gimple_bb (op_use_stmt)))
-	  {
-	    /* We want to allow x + x but not x < 1 ? x : 2.  */
-	    if (is_gimple_assign (op_use_stmt)
-		&& gimple_assign_rhs_code (op_use_stmt) == COND_EXPR)
-	      {
-		use_operand_p use_p;
-		FOR_EACH_IMM_USE_ON_STMT (use_p, imm_iter)
-		  cnt++;
-	      }
-	    else
-	      cnt++;
-	  }
-      if (cnt != 1)
-	{
-	  fail = true;
-	  break;
-	}
       tree_code use_code = gimple_assign_rhs_code (use_stmt);
       if (use_code == MINUS_EXPR)
 	{
@@ -2996,6 +3055,34 @@ pop:
       else if ((use_code == MIN_EXPR
 		|| use_code == MAX_EXPR)
 	       && sign != TYPE_SIGN (TREE_TYPE (gimple_assign_lhs (use_stmt))))
+	{
+	  fail = true;
+	  break;
+	}
+      /* Check there's only a single stmt the op is used on.  For the
+	 not value-changing tail and the last stmt allow out-of-loop uses.
+	 ???  We could relax this and handle arbitrary live stmts by
+	 forcing a scalar epilogue for example.  */
+      imm_use_iterator imm_iter;
+      gimple *op_use_stmt;
+      unsigned cnt = 0;
+      FOR_EACH_IMM_USE_STMT (op_use_stmt, imm_iter, op)
+	if (!is_gimple_debug (op_use_stmt)
+	    && (*code != ERROR_MARK
+		|| flow_bb_inside_loop_p (loop, gimple_bb (op_use_stmt))))
+	  {
+	    /* We want to allow x + x but not x < 1 ? x : 2.  */
+	    if (is_gimple_assign (op_use_stmt)
+		&& gimple_assign_rhs_code (op_use_stmt) == COND_EXPR)
+	      {
+		use_operand_p use_p;
+		FOR_EACH_IMM_USE_ON_STMT (use_p, imm_iter)
+		  cnt++;
+	      }
+	    else
+	      cnt++;
+	  }
+      if (cnt != 1)
 	{
 	  fail = true;
 	  break;
@@ -3877,8 +3964,8 @@ have_whole_vector_shift (machine_mode mode)
 /* Function vect_model_reduction_cost.
 
    Models cost for a reduction operation, including the vector ops
-   generated within the strip-mine loop, the initial definition before
-   the loop, and the epilogue code that must be generated.  */
+   generated within the strip-mine loop in some cases, the initial
+   definition before the loop, and the epilogue code that must be generated.  */
 
 static void
 vect_model_reduction_cost (stmt_vec_info stmt_info, internal_fn reduc_fn,
@@ -3941,10 +4028,6 @@ vect_model_reduction_cost (stmt_vec_info stmt_info, internal_fn reduc_fn,
       prologue_cost += record_stmt_cost (cost_vec, prologue_stmts,
 					 scalar_to_vec, stmt_info, 0,
 					 vect_prologue);
-
-      /* Cost of reduction op inside loop.  */
-      inside_cost = record_stmt_cost (cost_vec, ncopies, vector_stmt,
-				      stmt_info, 0, vect_body);
     }
 
   /* Determine cost of epilogue code.
@@ -4347,7 +4430,8 @@ info_for_reduction (stmt_vec_info stmt_info)
 {
   stmt_info = vect_orig_stmt (stmt_info);
   gcc_assert (STMT_VINFO_REDUC_DEF (stmt_info));
-  if (!is_a <gphi *> (stmt_info->stmt))
+  if (!is_a <gphi *> (stmt_info->stmt)
+      || !VECTORIZABLE_CYCLE_DEF (STMT_VINFO_DEF_TYPE (stmt_info)))
     stmt_info = STMT_VINFO_REDUC_DEF (stmt_info);
   gphi *phi = as_a <gphi *> (stmt_info->stmt);
   if (STMT_VINFO_DEF_TYPE (stmt_info) == vect_double_reduction_def)
@@ -6687,6 +6771,15 @@ vectorizable_reduction (stmt_vec_info stmt_info, slp_tree slp_node,
 
   vect_model_reduction_cost (stmt_info, reduc_fn, reduction_type, ncopies,
 			     cost_vec);
+  /* Cost the reduction op inside the loop if transformed via
+     vect_transform_reduction.  Otherwise this is costed by the
+     separate vectorizable_* routines.  */
+  if (single_defuse_cycle
+      || code == DOT_PROD_EXPR
+      || code == WIDEN_SUM_EXPR
+      || code == SAD_EXPR)
+    record_stmt_cost (cost_vec, ncopies, vector_stmt, stmt_info, 0, vect_body);
+
   if (dump_enabled_p ()
       && reduction_type == FOLD_LEFT_REDUCTION)
     dump_printf_loc (MSG_NOTE, vect_location,
@@ -7838,6 +7931,11 @@ vectorizable_live_operation (stmt_vec_info stmt_info,
 
   gcc_assert (STMT_VINFO_LIVE_P (stmt_info));
 
+  /* Due to how we generate code for SLP_TREE_TWO_OPERATORS we cannot
+     vectorize live operations out of it.  */
+  if (slp_node && SLP_TREE_TWO_OPERATORS (slp_node))
+    return false;
+
   /* If a stmt of a reduction is live, vectorize it via
      vect_create_epilog_for_reduction.  vectorizable_reduction assessed
      validity so just trigger the transform here.  */
@@ -8050,7 +8148,7 @@ vectorizable_live_operation (stmt_vec_info stmt_info,
   if (stmts)
     {
       gimple_stmt_iterator exit_gsi = gsi_after_labels (exit_bb);
-      gsi_insert_before (&exit_gsi, stmts, GSI_CONTINUE_LINKING);
+      gsi_insert_seq_before (&exit_gsi, stmts, GSI_SAME_STMT);
 
       /* Remove existing phi from lhs and create one copy from new_tree.  */
       tree lhs_phi = NULL_TREE;
@@ -8063,7 +8161,7 @@ vectorizable_live_operation (stmt_vec_info stmt_info,
 	      remove_phi_node (&gsi, false);
 	      lhs_phi = gimple_phi_result (phi);
 	      gimple *copy = gimple_build_assign (lhs_phi, new_tree);
-	      gsi_insert_after (&exit_gsi, copy, GSI_CONTINUE_LINKING);
+	      gsi_insert_before (&exit_gsi, copy, GSI_SAME_STMT);
 	      break;
 	    }
 	}
@@ -8300,11 +8398,52 @@ scale_profile_for_vect_loop (class loop *loop, unsigned vf)
     scale_bbs_frequencies (&loop->latch, 1, exit_l->probability / prob);
 }
 
+/* For a vectorized stmt DEF_STMT_INFO adjust all vectorized PHI
+   latch edge values originally defined by it.  */
+
+static void
+maybe_set_vectorized_backedge_value (loop_vec_info loop_vinfo,
+				     stmt_vec_info def_stmt_info)
+{
+  tree def = gimple_get_lhs (vect_orig_stmt (def_stmt_info)->stmt);
+  if (!def || TREE_CODE (def) != SSA_NAME)
+    return;
+  stmt_vec_info phi_info;
+  imm_use_iterator iter;
+  use_operand_p use_p;
+  FOR_EACH_IMM_USE_FAST (use_p, iter, def)
+    if (gphi *phi = dyn_cast <gphi *> (USE_STMT (use_p)))
+      if (gimple_bb (phi)->loop_father->header == gimple_bb (phi)
+	  && (phi_info = loop_vinfo->lookup_stmt (phi))
+	  && VECTORIZABLE_CYCLE_DEF (STMT_VINFO_DEF_TYPE (phi_info))
+	  && STMT_VINFO_REDUC_TYPE (phi_info) != FOLD_LEFT_REDUCTION
+	  && STMT_VINFO_REDUC_TYPE (phi_info) != EXTRACT_LAST_REDUCTION)
+	{
+	  loop_p loop = gimple_bb (phi)->loop_father;
+	  edge e = loop_latch_edge (loop);
+	  if (PHI_ARG_DEF_FROM_EDGE (phi, e) == def)
+	    {
+	      stmt_vec_info phi_vec_info = STMT_VINFO_VEC_STMT (phi_info);
+	      stmt_vec_info def_vec_info = STMT_VINFO_VEC_STMT (def_stmt_info);
+	      do
+		{
+		  add_phi_arg (as_a <gphi *> (phi_vec_info->stmt),
+			       gimple_get_lhs (def_vec_info->stmt), e,
+			       gimple_phi_arg_location (phi, e->dest_idx));
+		  phi_vec_info = STMT_VINFO_RELATED_STMT (phi_vec_info);
+		  def_vec_info = STMT_VINFO_RELATED_STMT (def_vec_info);
+		}
+	      while (phi_vec_info);
+	      gcc_assert (!def_vec_info);
+	    }
+	}
+}
+
 /* Vectorize STMT_INFO if relevant, inserting any new instructions before GSI.
    When vectorizing STMT_INFO as a store, set *SEEN_STORE to its
    stmt_vec_info.  */
 
-static void
+static bool
 vect_transform_loop_stmt (loop_vec_info loop_vinfo, stmt_vec_info stmt_info,
 			  gimple_stmt_iterator *gsi, stmt_vec_info *seen_store)
 {
@@ -8320,7 +8459,7 @@ vect_transform_loop_stmt (loop_vec_info loop_vinfo, stmt_vec_info stmt_info,
 
   if (!STMT_VINFO_RELEVANT_P (stmt_info)
       && !STMT_VINFO_LIVE_P (stmt_info))
-    return;
+    return false;
 
   if (STMT_VINFO_VECTYPE (stmt_info))
     {
@@ -8337,13 +8476,15 @@ vect_transform_loop_stmt (loop_vec_info loop_vinfo, stmt_vec_info stmt_info,
   /* Pure SLP statements have already been vectorized.  We still need
      to apply loop vectorization to hybrid SLP statements.  */
   if (PURE_SLP_STMT (stmt_info))
-    return;
+    return false;
 
   if (dump_enabled_p ())
     dump_printf_loc (MSG_NOTE, vect_location, "transform statement.\n");
 
   if (vect_transform_stmt (stmt_info, gsi, NULL, NULL))
     *seen_store = stmt_info;
+
+  return true;
 }
 
 /* Helper function to pass to simplify_replace_tree to enable replacing tree's
@@ -8670,7 +8811,7 @@ vect_transform_loop (loop_vec_info loop_vinfo, gimple *loop_vectorized_call)
 
       for (gphi_iterator si = gsi_start_phis (bb); !gsi_end_p (si);
 	   gsi_next (&si))
-        {
+	{
 	  gphi *phi = si.phi ();
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
@@ -8703,6 +8844,27 @@ vect_transform_loop (loop_vec_info loop_vinfo, gimple *loop_vectorized_call)
 		dump_printf_loc (MSG_NOTE, vect_location, "transform phi.\n");
 	      vect_transform_stmt (stmt_info, NULL, NULL, NULL);
 	    }
+	}
+
+      for (gphi_iterator si = gsi_start_phis (bb); !gsi_end_p (si);
+	   gsi_next (&si))
+	{
+	  gphi *phi = si.phi ();
+	  stmt_info = loop_vinfo->lookup_stmt (phi);
+	  if (!stmt_info)
+	    continue;
+
+	  if (!STMT_VINFO_RELEVANT_P (stmt_info)
+	      && !STMT_VINFO_LIVE_P (stmt_info))
+	    continue;
+
+	  if ((STMT_VINFO_DEF_TYPE (stmt_info) == vect_induction_def
+	       || STMT_VINFO_DEF_TYPE (stmt_info) == vect_reduction_def
+	       || STMT_VINFO_DEF_TYPE (stmt_info) == vect_double_reduction_def
+	       || STMT_VINFO_DEF_TYPE (stmt_info) == vect_nested_cycle
+	       || STMT_VINFO_DEF_TYPE (stmt_info) == vect_internal_def)
+	      && ! PURE_SLP_STMT (stmt_info))
+	    maybe_set_vectorized_backedge_value (loop_vinfo, stmt_info);
 	}
 
       for (gimple_stmt_iterator si = gsi_start_bb (bb);
@@ -8739,11 +8901,18 @@ vect_transform_loop (loop_vec_info loop_vinfo, gimple *loop_vectorized_call)
 			}
 		      stmt_vec_info pat_stmt_info
 			= STMT_VINFO_RELATED_STMT (stmt_info);
-		      vect_transform_loop_stmt (loop_vinfo, pat_stmt_info, &si,
-						&seen_store);
+		      if (vect_transform_loop_stmt (loop_vinfo, pat_stmt_info,
+						    &si, &seen_store))
+			maybe_set_vectorized_backedge_value (loop_vinfo,
+							     pat_stmt_info);
 		    }
-		  vect_transform_loop_stmt (loop_vinfo, stmt_info, &si,
-					    &seen_store);
+		  else
+		    {
+		      if (vect_transform_loop_stmt (loop_vinfo, stmt_info, &si,
+						    &seen_store))
+			maybe_set_vectorized_backedge_value (loop_vinfo,
+							     stmt_info);
+		    }
 		}
 	      gsi_next (&si);
 	      if (seen_store)

@@ -281,6 +281,7 @@
     UNSPEC_GEN_TAG_RND		; Generate a random 4-bit MTE tag.
     UNSPEC_TAG_SPACE		; Translate address to MTE tag address space.
     UNSPEC_LD1RO
+    UNSPEC_SALT_ADDR
 ])
 
 (define_c_enum "unspecv" [
@@ -407,10 +408,25 @@
 ;; Attribute that specifies whether the alternative uses MOVPRFX.
 (define_attr "movprfx" "no,yes" (const_string "no"))
 
+;; Attribute to specify that an alternative has the length of a single
+;; instruction plus a speculation barrier.
+(define_attr "sls_length" "none,retbr,casesi" (const_string "none"))
+
 (define_attr "length" ""
   (cond [(eq_attr "movprfx" "yes")
            (const_int 8)
-        ] (const_int 4)))
+
+	 (eq_attr "sls_length" "retbr")
+	   (cond [(match_test "!aarch64_harden_sls_retbr_p ()") (const_int 4)
+		  (match_test "TARGET_SB") (const_int 8)]
+		 (const_int 12))
+
+	 (eq_attr "sls_length" "casesi")
+	   (cond [(match_test "!aarch64_harden_sls_retbr_p ()") (const_int 16)
+		  (match_test "TARGET_SB") (const_int 20)]
+		 (const_int 24))
+	]
+	  (const_int 4)))
 
 ;; Strictly for compatibility with AArch32 in pipeline models, since AArch64 has
 ;; no predicated insns.
@@ -438,6 +454,7 @@
 (include "../arm/xgene1.md")
 (include "thunderx2t99.md")
 (include "tsv110.md")
+(include "thunderx3t110.md")
 
 ;; -------------------------------------------------------------------
 ;; Jumps and other miscellaneous insns
@@ -446,8 +463,12 @@
 (define_insn "indirect_jump"
   [(set (pc) (match_operand:DI 0 "register_operand" "r"))]
   ""
-  "br\\t%0"
-  [(set_attr "type" "branch")]
+  {
+    output_asm_insn ("br\\t%0", operands);
+    return aarch64_sls_barrier (aarch64_harden_sls_retbr_p ());
+  }
+  [(set_attr "type" "branch")
+   (set_attr "sls_length" "retbr")]
 )
 
 (define_insn "jump"
@@ -764,7 +785,7 @@
   "*
   return aarch64_output_casesi (operands);
   "
-  [(set_attr "length" "16")
+  [(set_attr "sls_length" "casesi")
    (set_attr "type" "branch")]
 )
 
@@ -843,18 +864,23 @@
   [(return)]
   ""
   {
+    const char *ret = NULL;
     if (aarch64_return_address_signing_enabled ()
 	&& TARGET_ARMV8_3
 	&& !crtl->calls_eh_return)
       {
 	if (aarch64_ra_sign_key == AARCH64_KEY_B)
-	  return "retab";
+	  ret = "retab";
 	else
-	  return "retaa";
+	  ret = "retaa";
       }
-    return "ret";
+    else
+      ret = "ret";
+    output_asm_insn (ret, operands);
+    return aarch64_sls_barrier (aarch64_harden_sls_retbr_p ());
   }
-  [(set_attr "type" "branch")]
+  [(set_attr "type" "branch")
+   (set_attr "sls_length" "retbr")]
 )
 
 (define_expand "return"
@@ -866,8 +892,12 @@
 (define_insn "simple_return"
   [(simple_return)]
   ""
-  "ret"
-  [(set_attr "type" "branch")]
+  {
+    output_asm_insn ("ret", operands);
+    return aarch64_sls_barrier (aarch64_harden_sls_retbr_p ());
+  }
+  [(set_attr "type" "branch")
+   (set_attr "sls_length" "retbr")]
 )
 
 (define_insn "*cb<optab><mode>1"
@@ -993,16 +1023,15 @@
 )
 
 (define_insn "*call_insn"
-  [(call (mem:DI (match_operand:DI 0 "aarch64_call_insn_operand" "r, Usf"))
+  [(call (mem:DI (match_operand:DI 0 "aarch64_call_insn_operand" "Ucr, Usf"))
 	 (match_operand 1 "" ""))
    (unspec:DI [(match_operand:DI 2 "const_int_operand")] UNSPEC_CALLEE_ABI)
    (clobber (reg:DI LR_REGNUM))]
   ""
   "@
-  blr\\t%0
+  * return aarch64_indirect_call_asm (operands[0]);
   bl\\t%c0"
-  [(set_attr "type" "call, call")]
-)
+  [(set_attr "type" "call, call")])
 
 (define_expand "call_value"
   [(parallel
@@ -1021,13 +1050,13 @@
 
 (define_insn "*call_value_insn"
   [(set (match_operand 0 "" "")
-	(call (mem:DI (match_operand:DI 1 "aarch64_call_insn_operand" "r, Usf"))
+	(call (mem:DI (match_operand:DI 1 "aarch64_call_insn_operand" "Ucr, Usf"))
 		      (match_operand 2 "" "")))
    (unspec:DI [(match_operand:DI 3 "const_int_operand")] UNSPEC_CALLEE_ABI)
    (clobber (reg:DI LR_REGNUM))]
   ""
   "@
-  blr\\t%1
+  * return aarch64_indirect_call_asm (operands[1]);
   bl\\t%c1"
   [(set_attr "type" "call, call")]
 )
@@ -1065,10 +1094,16 @@
    (unspec:DI [(match_operand:DI 2 "const_int_operand")] UNSPEC_CALLEE_ABI)
    (return)]
   "SIBLING_CALL_P (insn)"
-  "@
-   br\\t%0
-   b\\t%c0"
-  [(set_attr "type" "branch, branch")]
+  {
+    if (which_alternative == 0)
+      {
+	output_asm_insn ("br\\t%0", operands);
+	return aarch64_sls_barrier (aarch64_harden_sls_retbr_p ());
+      }
+    return "b\\t%c0";
+  }
+  [(set_attr "type" "branch, branch")
+   (set_attr "sls_length" "retbr,none")]
 )
 
 (define_insn "*sibcall_value_insn"
@@ -1079,10 +1114,16 @@
    (unspec:DI [(match_operand:DI 3 "const_int_operand")] UNSPEC_CALLEE_ABI)
    (return)]
   "SIBLING_CALL_P (insn)"
-  "@
-   br\\t%1
-   b\\t%c1"
-  [(set_attr "type" "branch, branch")]
+  {
+    if (which_alternative == 0)
+      {
+	output_asm_insn ("br\\t%1", operands);
+	return aarch64_sls_barrier (aarch64_harden_sls_retbr_p ());
+      }
+    return "b\\t%c1";
+  }
+  [(set_attr "type" "branch, branch")
+   (set_attr "sls_length" "retbr,none")]
 )
 
 ;; Call subroutine returning any type.
@@ -1857,6 +1898,14 @@
       && (!REG_P (op1)
 	 || !REGNO_PTR_FRAME_P (REGNO (op1))))
     operands[2] = force_reg (<MODE>mode, operands[2]);
+  /* Some tunings prefer to avoid VL-based operations.
+     Split off the poly immediate here.  The rtx costs hook will reject attempts
+     to combine them back.  */
+  else if (GET_CODE (operands[2]) == CONST_POLY_INT
+	   && can_create_pseudo_p ()
+	   && (aarch64_tune_params.extra_tuning_flags
+	       & AARCH64_EXTRA_TUNE_CSE_SVE_VL_CONSTANTS))
+    operands[2] = force_reg (<MODE>mode, operands[2]);
   /* Expand polynomial additions now if the destination is the stack
      pointer, since we don't want to use that as a temporary.  */
   else if (operands[0] == stack_pointer_rtx
@@ -1966,8 +2015,8 @@
   [(set
     (match_operand:GPI 0 "register_operand" "=r,r,r,r,r,r,&r")
     (plus:GPI
-     (match_operand:GPI 1 "register_operand" "%rk,rk,rk,rk,rk,0,rk")
-     (match_operand:GPI 2 "aarch64_pluslong_or_poly_operand" "I,r,J,Uaa,Uav,Uai,Uat")))]
+     (match_operand:GPI 1 "register_operand" "%rk,rk,rk,rk,0,rk,rk")
+     (match_operand:GPI 2 "aarch64_pluslong_or_poly_operand" "I,r,J,Uaa,Uai,Uav,Uat")))]
   "TARGET_SVE && operands[0] != stack_pointer_rtx"
   "@
   add\\t%<w>0, %<w>1, %2
@@ -5877,10 +5926,10 @@
     {
       case 0:
 	operands[3] = GEN_INT (ctz_hwi (~INTVAL (operands[3])));
-	return "bfxil\\t%0, %1, 0, %3";
+	return "bfxil\\t%w0, %w1, 0, %3";
       case 1:
 	operands[3] = GEN_INT (ctz_hwi (~INTVAL (operands[4])));
-	return "bfxil\\t%0, %2, 0, %3";
+	return "bfxil\\t%w0, %w2, 0, %3";
       default:
 	gcc_unreachable ();
     }
@@ -6968,7 +7017,8 @@
 (define_insn "aarch64_fjcvtzs"
   [(set (match_operand:SI 0 "register_operand" "=r")
 	(unspec:SI [(match_operand:DF 1 "register_operand" "w")]
-		   UNSPEC_FJCVTZS))]
+		   UNSPEC_FJCVTZS))
+   (clobber (reg:CC CC_REGNUM))]
   "TARGET_JSCVT"
   "fjcvtzs\\t%w0, %d1"
   [(set_attr "type" "f_cvtf2i")]
@@ -7060,43 +7110,37 @@
   DONE;
 })
 
-;; Named patterns for stack smashing protection.
+;; Defined for -mstack-protector-guard=sysreg, which goes through this
+;; pattern rather than stack_protect_combined_set.  Our implementation
+;; of the latter can handle both.
 (define_expand "stack_protect_set"
   [(match_operand 0 "memory_operand")
-   (match_operand 1 "memory_operand")]
+   (match_operand 1 "")]
+  ""
+{
+  emit_insn (gen_stack_protect_combined_set (operands[0], operands[1]));
+  DONE;
+})
+
+(define_expand "stack_protect_combined_set"
+  [(match_operand 0 "memory_operand")
+   (match_operand 1 "")]
   ""
 {
   machine_mode mode = GET_MODE (operands[0]);
-  if (aarch64_stack_protector_guard != SSP_GLOBAL)
-  {
-    /* Generate access through the system register.  */
-    rtx tmp_reg = gen_reg_rtx (mode);
-    if (mode == DImode)
-    {
-        emit_insn (gen_reg_stack_protect_address_di (tmp_reg));
-        emit_insn (gen_adddi3 (tmp_reg, tmp_reg,
-			       GEN_INT (aarch64_stack_protector_guard_offset)));
-    }
-    else
-    {
-	emit_insn (gen_reg_stack_protect_address_si (tmp_reg));
-	emit_insn (gen_addsi3 (tmp_reg, tmp_reg,
-			       GEN_INT (aarch64_stack_protector_guard_offset)));
-
-    }
-    operands[1] = gen_rtx_MEM (mode, tmp_reg);
-  }
-  
+  operands[1] = aarch64_stack_protect_canary_mem (mode, operands[1],
+						  AARCH64_SALT_SSP_SET);
   emit_insn ((mode == DImode
 	      ? gen_stack_protect_set_di
 	      : gen_stack_protect_set_si) (operands[0], operands[1]));
   DONE;
 })
 
+;; Operand 1 is either AARCH64_SALT_SSP_SET or AARCH64_SALT_SSP_TEST.
 (define_insn "reg_stack_protect_address_<mode>"
  [(set (match_operand:PTR 0 "register_operand" "=r")
-       (unspec:PTR [(const_int 0)]
-	UNSPEC_SSP_SYSREG))]
+       (unspec:PTR [(match_operand 1 "const_int_operand")]
+		   UNSPEC_SSP_SYSREG))]
  "aarch64_stack_protector_guard != SSP_GLOBAL"
  {
    char buf[150];
@@ -7119,63 +7163,51 @@
   [(set_attr "length" "12")
    (set_attr "type" "multiple")])
 
+;; Defined for -mstack-protector-guard=sysreg, which goes through this
+;; pattern rather than stack_protect_combined_test.  Our implementation
+;; of the latter can handle both.
 (define_expand "stack_protect_test"
   [(match_operand 0 "memory_operand")
-   (match_operand 1 "memory_operand")
+   (match_operand 1 "")
    (match_operand 2)]
   ""
 {
-  rtx result;
-  machine_mode mode = GET_MODE (operands[0]);
-
-  result = gen_reg_rtx(mode);
-  if (aarch64_stack_protector_guard != SSP_GLOBAL)
-  {
-    /* Generate access through the system register. The
-       sequence we want here is the access
-       of the stack offset to come with
-       mrs scratch_reg, <system_register>
-       add scratch_reg, scratch_reg, :lo12:offset. */
-    rtx tmp_reg = gen_reg_rtx (mode);
-    if (mode == DImode)
-    {
-       emit_insn (gen_reg_stack_protect_address_di (tmp_reg));
-       emit_insn (gen_adddi3 (tmp_reg, tmp_reg,
-       		              GEN_INT (aarch64_stack_protector_guard_offset)));
-    }
-    else
-    {
-	emit_insn (gen_reg_stack_protect_address_si (tmp_reg));
-	emit_insn (gen_addsi3 (tmp_reg, tmp_reg,
-			       GEN_INT (aarch64_stack_protector_guard_offset)));
-
-    }
-    operands[1] = gen_rtx_MEM (mode, tmp_reg);
-  }
-  emit_insn ((mode == DImode
-		  ? gen_stack_protect_test_di
-		  : gen_stack_protect_test_si) (result,
-					        operands[0],
-					        operands[1]));
-
-  if (mode == DImode)
-    emit_jump_insn (gen_cbranchdi4 (gen_rtx_EQ (VOIDmode, result, const0_rtx),
-				    result, const0_rtx, operands[2]));
-  else
-    emit_jump_insn (gen_cbranchsi4 (gen_rtx_EQ (VOIDmode, result, const0_rtx),
-				    result, const0_rtx, operands[2]));
+  emit_insn (gen_stack_protect_combined_test (operands[0], operands[1],
+					      operands[2]));
   DONE;
 })
 
+(define_expand "stack_protect_combined_test"
+  [(match_operand 0 "memory_operand")
+   (match_operand 1 "")
+   (match_operand 2)]
+  ""
+{
+  machine_mode mode = GET_MODE (operands[0]);
+  operands[1] = aarch64_stack_protect_canary_mem (mode, operands[1],
+						  AARCH64_SALT_SSP_TEST);
+  emit_insn ((mode == DImode
+	     ? gen_stack_protect_test_di
+	     : gen_stack_protect_test_si) (operands[0], operands[1]));
+
+  rtx cc_reg = gen_rtx_REG (CCmode, CC_REGNUM);
+  emit_jump_insn (gen_condjump (gen_rtx_EQ (VOIDmode, cc_reg, const0_rtx),
+				cc_reg, operands[2]));
+  DONE;
+})
+
+;; DO NOT SPLIT THIS PATTERN.  It is important for security reasons that the
+;; canary value does not live beyond the end of this sequence.
 (define_insn "stack_protect_test_<mode>"
-  [(set (match_operand:PTR 0 "register_operand" "=r")
-	(unspec:PTR [(match_operand:PTR 1 "memory_operand" "m")
-		     (match_operand:PTR 2 "memory_operand" "m")]
-	 UNSPEC_SP_TEST))
+  [(set (reg:CC CC_REGNUM)
+	(unspec:CC [(match_operand:PTR 0 "memory_operand" "m")
+		    (match_operand:PTR 1 "memory_operand" "m")]
+		   UNSPEC_SP_TEST))
+   (clobber (match_scratch:PTR 2 "=&r"))
    (clobber (match_scratch:PTR 3 "=&r"))]
   ""
-  "ldr\t%<w>3, %1\;ldr\t%<w>0, %2\;eor\t%<w>0, %<w>3, %<w>0"
-  [(set_attr "length" "12")
+  "ldr\t%<w>2, %0\;ldr\t%<w>3, %1\;subs\t%<w>2, %<w>2, %<w>3\;mov\t%3, 0"
+  [(set_attr "length" "16")
    (set_attr "type" "multiple")])
 
 ;; Write Floating-point Control Register.

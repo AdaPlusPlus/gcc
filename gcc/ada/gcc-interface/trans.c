@@ -3271,38 +3271,6 @@ can_equal_max_val_p (tree val, tree type, bool reverse)
   return can_equal_min_or_max_val_p (val, type, !reverse);
 }
 
-/* Return true if VAL1 can be lower than VAL2.  */
-
-static bool
-can_be_lower_p (tree val1, tree val2)
-{
-  if (TREE_CODE (val1) == NOP_EXPR)
-    {
-      tree type = TREE_TYPE (TREE_OPERAND (val1, 0));
-      if (can_be_lower_p (TYPE_MAX_VALUE (type), TYPE_MIN_VALUE (type)))
-	return true;
-
-      val1 = TYPE_MIN_VALUE (type);
-    }
-
-  if (TREE_CODE (val1) != INTEGER_CST)
-    return true;
-
-  if (TREE_CODE (val2) == NOP_EXPR)
-    {
-      tree type = TREE_TYPE (TREE_OPERAND (val2, 0));
-      if (can_be_lower_p (TYPE_MAX_VALUE (type), TYPE_MIN_VALUE (type)))
-	return true;
-
-      val2 = TYPE_MAX_VALUE (type);
-    }
-
-  if (TREE_CODE (val2) != INTEGER_CST)
-    return true;
-
-  return tree_int_cst_lt (val1, val2);
-}
-
 /* Replace EXPR1 and EXPR2 by invariant expressions if possible.  Return
    true if both expressions have been replaced and false otherwise.  */
 
@@ -3725,19 +3693,16 @@ Regular_Loop_to_gnu (Node_Id gnat_node, tree *gnu_cond_expr_p)
 	}
 
       /* If we use the BOTTOM_COND, we can turn the test into an inequality
-	 test but we may have to add ENTRY_COND to protect the empty loop.  */
+	 test but we have to add ENTRY_COND to protect the empty loop.  */
       if (LOOP_STMT_BOTTOM_COND_P (gnu_loop_stmt))
 	{
 	  test_code = NE_EXPR;
-	  if (can_be_lower_p (gnu_high, gnu_low))
-	    {
-	      gnu_cond_expr
-		= build3 (COND_EXPR, void_type_node,
-			  build_binary_op (LE_EXPR, boolean_type_node,
-					   gnu_low, gnu_high),
-			  NULL_TREE, alloc_stmt_list ());
-	      set_expr_location_from_node (gnu_cond_expr, gnat_iter_scheme);
-	    }
+	  gnu_cond_expr
+	    = build3 (COND_EXPR, void_type_node,
+		      build_binary_op (LE_EXPR, boolean_type_node,
+				       gnu_low, gnu_high),
+		      NULL_TREE, alloc_stmt_list ());
+	  set_expr_location_from_node (gnu_cond_expr, gnat_iter_scheme);
 	}
 
       /* Open a new nesting level that will surround the loop to declare the
@@ -7662,6 +7627,8 @@ gnat_to_gnu (Node_Id gnat_node)
 	    if (TREE_CODE (gnu_lhs) == INTEGER_CST && ignore_lhs_overflow)
 	      TREE_OVERFLOW (gnu_lhs) = TREE_OVERFLOW (gnu_old_lhs);
 	    gnu_rhs = convert (gnu_type, gnu_rhs);
+	    if (gnu_max_shift)
+	      gnu_max_shift = convert (gnu_type, gnu_max_shift);
 	  }
 
 	/* For signed integer addition, subtraction and multiplication, do an
@@ -7748,9 +7715,8 @@ gnat_to_gnu (Node_Id gnat_node)
 
     case N_Allocator:
       {
-	tree gnu_init = NULL_TREE;
-	tree gnu_type;
-	bool ignore_init_type = false;
+	tree gnu_type, gnu_init;
+	bool ignore_init_type;
 
 	gnat_temp = Expression (gnat_node);
 
@@ -7759,15 +7725,22 @@ gnat_to_gnu (Node_Id gnat_node)
 	   contains both the type and an initial value for the object.  */
 	if (Nkind (gnat_temp) == N_Identifier
 	    || Nkind (gnat_temp) == N_Expanded_Name)
-	  gnu_type = gnat_to_gnu_type (Entity (gnat_temp));
+	  {
+	    ignore_init_type = false;
+	    gnu_init = NULL_TREE;
+	    gnu_type = gnat_to_gnu_type (Entity (gnat_temp));
+	  }
+
 	else if (Nkind (gnat_temp) == N_Qualified_Expression)
 	  {
 	    Entity_Id gnat_desig_type
 	      = Designated_Type (Underlying_Type (Etype (gnat_node)));
 
-	    ignore_init_type = Has_Constrained_Partial_View (gnat_desig_type);
-	    gnu_init = gnat_to_gnu (Expression (gnat_temp));
+	    /* The flag is effectively only set on the base types.  */
+	    ignore_init_type
+	      = Has_Constrained_Partial_View (Base_Type (gnat_desig_type));
 
+	    gnu_init = gnat_to_gnu (Expression (gnat_temp));
 	    gnu_init = maybe_unconstrained_array (gnu_init);
 
 	    gigi_checking_assert (!Do_Range_Check (Expression (gnat_temp)));
@@ -9057,14 +9030,15 @@ add_decl_expr (tree gnu_decl, Node_Id gnat_node)
 	  MARK_VISITED (DECL_SIZE_UNIT (gnu_decl));
 	  MARK_VISITED (DECL_INITIAL (gnu_decl));
 	}
-      /* In any case, we have to deal with our own TYPE_ADA_SIZE field.  */
-      else if (TREE_CODE (gnu_decl) == TYPE_DECL
-	       && RECORD_OR_UNION_TYPE_P (type)
-	       && !TYPE_FAT_POINTER_P (type))
-	MARK_VISITED (TYPE_ADA_SIZE (type));
     }
   else
     add_stmt_with_node (gnu_stmt, gnat_node);
+
+  /* Mark our TYPE_ADA_SIZE field now since it will not be gimplified.  */
+  if (TREE_CODE (gnu_decl) == TYPE_DECL
+      && RECORD_OR_UNION_TYPE_P (type)
+      && !TYPE_FAT_POINTER_P (type))
+    MARK_VISITED (TYPE_ADA_SIZE (type));
 
   /* If this is a variable and an initializer is attached to it, it must be
      valid for the context.  Similar to init_const in create_var_decl.  */
@@ -9952,6 +9926,11 @@ build_binary_op_trapv (enum tree_code code, tree gnu_type, tree left,
   /* If no operand is a constant, we use the generic implementation.  */
   if (TREE_CODE (lhs) != INTEGER_CST && TREE_CODE (rhs) != INTEGER_CST)
     {
+      /* First convert the operands to the result type like build_binary_op.
+	 This is where the bias is made explicit for biased types.  */
+      lhs = convert (gnu_type, lhs);
+      rhs = convert (gnu_type, rhs);
+
       /* Never inline a 64-bit mult for a 32-bit target, it's way too long.  */
       if (code == MULT_EXPR && precision == 64 && BITS_PER_WORD < 64)
 	{
@@ -11209,7 +11188,7 @@ make_alias_for_thunk (tree target)
   return alias;
 }
 
-/* Create the covariant part of the {GNAT,GNU}_THUNK.  */
+/* Create the local covariant part of {GNAT,GNU}_THUNK.  */
 
 static tree
 make_covariant_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
@@ -11220,6 +11199,11 @@ make_covariant_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
 		  gnu_name, TREE_TYPE (gnu_thunk));
 
   DECL_ARGUMENTS (gnu_cv_thunk) = copy_list (DECL_ARGUMENTS (gnu_thunk));
+  for (tree param_decl = DECL_ARGUMENTS (gnu_cv_thunk);
+       param_decl;
+       param_decl = DECL_CHAIN (param_decl))
+    DECL_CONTEXT (param_decl) = gnu_cv_thunk;
+
   DECL_RESULT (gnu_cv_thunk) = copy_node (DECL_RESULT (gnu_thunk));
   DECL_CONTEXT (DECL_RESULT (gnu_cv_thunk)) = gnu_cv_thunk;
 
@@ -11227,7 +11211,6 @@ make_covariant_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
   DECL_CONTEXT (gnu_cv_thunk) = DECL_CONTEXT (gnu_thunk);
   TREE_READONLY (gnu_cv_thunk) = TREE_READONLY (gnu_thunk);
   TREE_THIS_VOLATILE (gnu_cv_thunk) = TREE_THIS_VOLATILE (gnu_thunk);
-  TREE_PUBLIC (gnu_cv_thunk) = TREE_PUBLIC (gnu_thunk);
   DECL_ARTIFICIAL (gnu_cv_thunk) = 1;
 
   return gnu_cv_thunk;
@@ -11328,8 +11311,11 @@ maybe_make_gnu_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
 
   tree gnu_target = gnat_to_gnu_entity (gnat_target, NULL_TREE, false);
 
-  /* Thunk and target must have the same nesting level, if any.  */
-  gcc_assert (DECL_CONTEXT (gnu_thunk) == DECL_CONTEXT (gnu_target));
+  /* If the target is local, then thunk and target must have the same context
+     because cgraph_node::expand_thunk can only forward the static chain.  */
+  if (DECL_STATIC_CHAIN (gnu_target)
+      && DECL_CONTEXT (gnu_thunk) != DECL_CONTEXT (gnu_target))
+    return false;
 
   /* If the target returns by invisible reference and is external, apply the
      same transformation as Subprogram_Body_to_gnu here.  */
@@ -11354,6 +11340,12 @@ maybe_make_gnu_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
 
   cgraph_node *target_node = cgraph_node::get_create (gnu_target);
 
+  /* We may also need to create an alias for the target in order to make
+     the call local, depending on the linkage of the target.  */
+  tree gnu_alias = use_alias_for_thunk_p (gnu_target)
+		  ? make_alias_for_thunk (gnu_target)
+		  : gnu_target;
+
   /* If the return type of the target is a controlling type, then we need
      both an usual this thunk and a covariant thunk in this order:
 
@@ -11366,16 +11358,10 @@ maybe_make_gnu_thunk (Entity_Id gnat_thunk, tree gnu_thunk)
       tree gnu_cv_thunk = make_covariant_thunk (gnat_thunk, gnu_thunk);
       target_node->create_thunk (gnu_cv_thunk, gnu_target, false,
 				 - fixed_offset, 0, 0,
-				 NULL_TREE, gnu_target);
+				 NULL_TREE, gnu_alias);
 
-      gnu_target = gnu_cv_thunk;
+      gnu_alias = gnu_target = gnu_cv_thunk;
     }
-
-  /* We may also need to create an alias for the target in order to make
-     the call local, depending on the linkage of the target.  */
-  tree gnu_alias = use_alias_for_thunk_p (gnu_target)
-		  ? make_alias_for_thunk (gnu_target)
-		  : gnu_target;
 
   target_node->create_thunk (gnu_thunk, gnu_target, true,
 			     fixed_offset, virtual_value, indirect_offset,

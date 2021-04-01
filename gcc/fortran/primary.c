@@ -1190,6 +1190,61 @@ got_delim:
   if (match_substring (NULL, 0, &e->ref, false) != MATCH_NO)
     e->expr_type = EXPR_SUBSTRING;
 
+  /* Substrings with constant starting and ending points are eligible as
+     designators (F2018, section 9.1).  Simplify substrings to make them usable
+     e.g. in data statements.  */
+  if (e->expr_type == EXPR_SUBSTRING
+      && e->ref && e->ref->type == REF_SUBSTRING
+      && e->ref->u.ss.start->expr_type == EXPR_CONSTANT
+      && (e->ref->u.ss.end == NULL
+	  || e->ref->u.ss.end->expr_type == EXPR_CONSTANT))
+    {
+      gfc_expr *res;
+      ptrdiff_t istart, iend;
+      size_t length;
+      bool equal_length = false;
+
+      /* Basic checks on substring starting and ending indices.  */
+      if (!gfc_resolve_substring (e->ref, &equal_length))
+	return MATCH_ERROR;
+
+      length = e->value.character.length;
+      istart = gfc_mpz_get_hwi (e->ref->u.ss.start->value.integer);
+      if (e->ref->u.ss.end == NULL)
+	iend = length;
+      else
+	iend = gfc_mpz_get_hwi (e->ref->u.ss.end->value.integer);
+
+      if (istart <= iend)
+	{
+	  if (istart < 1)
+	    {
+	      gfc_error ("Substring start index (%ld) at %L below 1",
+			 (long) istart, &e->ref->u.ss.start->where);
+	      return MATCH_ERROR;
+	    }
+	  if (iend > (ssize_t) length)
+	    {
+	      gfc_error ("Substring end index (%ld) at %L exceeds string "
+			 "length", (long) iend, &e->ref->u.ss.end->where);
+	      return MATCH_ERROR;
+	    }
+	  length = iend - istart + 1;
+	}
+      else
+	length = 0;
+
+      res = gfc_get_constant_expr (BT_CHARACTER, e->ts.kind, &e->where);
+      res->value.character.string = gfc_get_wide_string (length + 1);
+      res->value.character.length = length;
+      if (length > 0)
+	memcpy (res->value.character.string,
+		&e->value.character.string[istart - 1],
+		length * sizeof (gfc_char_t));
+      res->value.character.string[length] = '\0';
+      e = res;
+    }
+
   *result = e;
 
   return MATCH_YES;
@@ -2023,7 +2078,8 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 {
   char name[GFC_MAX_SYMBOL_LEN + 1];
   gfc_ref *substring, *tail, *tmp;
-  gfc_component *component;
+  gfc_component *component = NULL;
+  gfc_component *previous = NULL;
   gfc_symbol *sym = primary->symtree->n.sym;
   gfc_expr *tgt_expr = NULL;
   match m;
@@ -2245,6 +2301,27 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 	    {
 	      if (tmp)
 		{
+		  switch (tmp->u.i)
+		    {
+		    case INQUIRY_RE:
+		    case INQUIRY_IM:
+		      if (!gfc_notify_std (GFC_STD_F2008,
+					   "RE or IM part_ref at %C"))
+			return MATCH_ERROR;
+		      break;
+
+		    case INQUIRY_KIND:
+		      if (!gfc_notify_std (GFC_STD_F2003,
+					   "KIND part_ref at %C"))
+			return MATCH_ERROR;
+		      break;
+
+		    case INQUIRY_LEN:
+		      if (!gfc_notify_std (GFC_STD_F2003, "LEN part_ref at %C"))
+			return MATCH_ERROR;
+		      break;
+		    }
+
 		  if ((tmp->u.i == INQUIRY_RE || tmp->u.i == INQUIRY_IM)
 		      && primary->ts.type != BT_COMPLEX)
 		    {
@@ -2322,15 +2399,23 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 	  break;
 	}
 
+      previous = component;
+
       if (!inquiry && !intrinsic)
 	component = gfc_find_component (sym, name, false, false, &tmp);
       else
 	component = NULL;
 
-      /* In some cases, returning MATCH_NO gives a better error message. Most
-	 cases return "Unclassifiable statement at..."  */
       if (intrinsic && !inquiry)
-	return MATCH_NO;
+	{
+	  if (previous)
+	    gfc_error ("%qs at %C is not an inquiry reference to an intrinsic "
+			"type component %qs", name, previous->name);
+	  else
+	    gfc_error ("%qs at %C is not an inquiry reference to an intrinsic "
+			"type component", name);
+	  return MATCH_ERROR;
+	}
       else if (component == NULL && !inquiry)
 	return MATCH_ERROR;
 
@@ -2576,7 +2661,7 @@ gfc_variable_attr (gfc_expr *expr, gfc_typespec *ts)
   sym = expr->symtree->n.sym;
   attr = sym->attr;
 
-  if (sym->ts.type == BT_CLASS && sym->attr.class_ok)
+  if (sym->ts.type == BT_CLASS && sym->attr.class_ok && sym->ts.u.derived)
     {
       dimension = CLASS_DATA (sym)->attr.dimension;
       codimension = CLASS_DATA (sym)->attr.codimension;

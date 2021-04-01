@@ -1961,6 +1961,50 @@ mark_exp_read (tree exp)
       mark_exp_read (TREE_OPERAND (exp, 0));
       break;
     case COMPOUND_EXPR:
+      /* Pattern match what build_atomic_assign produces with modifycode
+	 NOP_EXPR.  */
+      if (VAR_P (TREE_OPERAND (exp, 1))
+	  && DECL_ARTIFICIAL (TREE_OPERAND (exp, 1))
+	  && TREE_CODE (TREE_OPERAND (exp, 0)) == COMPOUND_EXPR)
+	{
+	  tree t1 = TREE_OPERAND (TREE_OPERAND (exp, 0), 0);
+	  tree t2 = TREE_OPERAND (TREE_OPERAND (exp, 0), 1);
+	  if (TREE_CODE (t1) == TARGET_EXPR
+	      && TARGET_EXPR_SLOT (t1) == TREE_OPERAND (exp, 1)
+	      && TREE_CODE (t2) == CALL_EXPR)
+	    {
+	      tree fndecl = get_callee_fndecl (t2);
+	      tree arg = NULL_TREE;
+	      if (fndecl
+		  && TREE_CODE (fndecl) == FUNCTION_DECL
+		  && fndecl_built_in_p (fndecl, BUILT_IN_NORMAL)
+		  && call_expr_nargs (t2) >= 2)
+		switch (DECL_FUNCTION_CODE (fndecl))
+		  {
+		  case BUILT_IN_ATOMIC_STORE:
+		    arg = CALL_EXPR_ARG (t2, 1);
+		    break;
+		  case BUILT_IN_ATOMIC_STORE_1:
+		  case BUILT_IN_ATOMIC_STORE_2:
+		  case BUILT_IN_ATOMIC_STORE_4:
+		  case BUILT_IN_ATOMIC_STORE_8:
+		  case BUILT_IN_ATOMIC_STORE_16:
+		    arg = CALL_EXPR_ARG (t2, 0);
+		    break;
+		  default:
+		    break;
+		  }
+	      if (arg)
+		{
+		  STRIP_NOPS (arg);
+		  if (TREE_CODE (arg) == ADDR_EXPR
+		      && DECL_P (TREE_OPERAND (arg, 0))
+		      && TYPE_ATOMIC (TREE_TYPE (TREE_OPERAND (arg, 0))))
+		    mark_exp_read (TREE_OPERAND (arg, 0));
+		}
+	    }
+	}
+      /* FALLTHRU */
     case C_MAYBE_CONST_EXPR:
       mark_exp_read (TREE_OPERAND (exp, 1));
       break;
@@ -4055,7 +4099,7 @@ build_atomic_assign (location_t loc, tree lhs, enum tree_code modifycode,
   vec<tree, va_gc> *params;
   tree val, nonatomic_lhs_type, nonatomic_rhs_type, newval, newval_addr;
   tree old, old_addr;
-  tree compound_stmt;
+  tree compound_stmt = NULL_TREE;
   tree stmt, goto_stmt;
   tree loop_label, loop_decl, done_label, done_decl;
 
@@ -4076,7 +4120,15 @@ build_atomic_assign (location_t loc, tree lhs, enum tree_code modifycode,
 
   /* Create a compound statement to hold the sequence of statements
      with a loop.  */
-  compound_stmt = c_begin_compound_stmt (false);
+  if (modifycode != NOP_EXPR)
+    {
+      compound_stmt = c_begin_compound_stmt (false);
+
+      /* For consistency with build_modify_expr on non-_Atomic,
+	 mark the lhs as read.  Also, it would be very hard to match
+	 such expressions in mark_exp_read.  */
+      mark_exp_read (lhs);
+    }
 
   /* Remove any excess precision (which is only present here in the
      case of compound assignments).  */
@@ -4102,13 +4154,16 @@ build_atomic_assign (location_t loc, tree lhs, enum tree_code modifycode,
   TREE_NO_WARNING (val) = 1;
   rhs = build4 (TARGET_EXPR, nonatomic_rhs_type, val, rhs, NULL_TREE,
 		NULL_TREE);
+  TREE_SIDE_EFFECTS (rhs) = 1;
   SET_EXPR_LOCATION (rhs, loc);
-  add_stmt (rhs);
+  if (modifycode != NOP_EXPR)
+    add_stmt (rhs);
 
   /* NOP_EXPR indicates it's a straight store of the RHS. Simply issue
      an atomic_store.  */
   if (modifycode == NOP_EXPR)
     {
+      compound_stmt = rhs;
       /* Build __atomic_store (&lhs, &val, SEQ_CST)  */
       rhs = build_unary_op (loc, ADDR_EXPR, val, false);
       fndecl = builtin_decl_explicit (BUILT_IN_ATOMIC_STORE);
@@ -4116,10 +4171,9 @@ build_atomic_assign (location_t loc, tree lhs, enum tree_code modifycode,
       params->quick_push (rhs);
       params->quick_push (seq_cst);
       func_call = c_build_function_call_vec (loc, vNULL, fndecl, params, NULL);
-      add_stmt (func_call);
 
-      /* Finish the compound statement.  */
-      compound_stmt = c_end_compound_stmt (loc, compound_stmt, false);
+      compound_stmt = build2 (COMPOUND_EXPR, void_type_node,
+			      compound_stmt, func_call);
 
       /* VAL is the value which was stored, return a COMPOUND_STMT of
 	 the statement and that value.  */
@@ -9910,6 +9964,47 @@ output_pending_init_elements (int all, struct obstack * braced_init_obstack)
   goto retry;
 }
 
+/* Expression VALUE coincides with the start of type TYPE in a braced
+   initializer.  Return true if we should treat VALUE as initializing
+   the first element of TYPE, false if we should treat it as initializing
+   TYPE as a whole.
+
+   If the initializer is clearly invalid, the question becomes:
+   which choice gives the best error message?  */
+
+static bool
+initialize_elementwise_p (tree type, tree value)
+{
+  if (type == error_mark_node || value == error_mark_node)
+    return false;
+
+  gcc_checking_assert (TYPE_MAIN_VARIANT (type) == type);
+
+  tree value_type = TREE_TYPE (value);
+  if (value_type == error_mark_node)
+    return false;
+
+  /* GNU vectors can be initialized elementwise.  However, treat any
+     kind of vector value as initializing the vector type as a whole,
+     regardless of whether the value is a GNU vector.  Such initializers
+     are valid if and only if they would have been valid in a non-braced
+     initializer like:
+
+	TYPE foo = VALUE;
+
+     so recursing into the vector type would be at best confusing or at
+     worst wrong.  For example, when -flax-vector-conversions is in effect,
+     it's possible to initialize a V8HI from a V4SI, even though the vectors
+     have different element types and different numbers of elements.  */
+  if (gnu_vector_type_p (type))
+    return !VECTOR_TYPE_P (value_type);
+
+  if (AGGREGATE_TYPE_P (type))
+    return type != TYPE_MAIN_VARIANT (value_type);
+
+  return false;
+}
+
 /* Add one non-braced element to the current constructor level.
    This adjusts the current position within the constructor's type.
    This may also start or terminate implicit levels
@@ -10089,11 +10184,7 @@ process_init_element (location_t loc, struct c_expr value, bool implicit,
 	  /* Otherwise, if we have come to a subaggregate,
 	     and we don't have an element of its type, push into it.  */
 	  else if (value.value != NULL_TREE
-		   && value.value != error_mark_node
-		   && TYPE_MAIN_VARIANT (TREE_TYPE (value.value)) != fieldtype
-		   && (fieldcode == RECORD_TYPE || fieldcode == ARRAY_TYPE
-		       || fieldcode == UNION_TYPE
-		       || gnu_vector_type_p (fieldtype)))
+		   && initialize_elementwise_p (fieldtype, value.value))
 	    {
 	      push_init_level (loc, 1, braced_init_obstack);
 	      continue;
@@ -10181,11 +10272,7 @@ process_init_element (location_t loc, struct c_expr value, bool implicit,
 	  /* Otherwise, if we have come to a subaggregate,
 	     and we don't have an element of its type, push into it.  */
 	  else if (value.value != NULL_TREE
-		   && value.value != error_mark_node
-		   && TYPE_MAIN_VARIANT (TREE_TYPE (value.value)) != fieldtype
-		   && (fieldcode == RECORD_TYPE || fieldcode == ARRAY_TYPE
-		       || fieldcode == UNION_TYPE
-		       || gnu_vector_type_p (fieldtype)))
+		   && initialize_elementwise_p (fieldtype, value.value))
 	    {
 	      push_init_level (loc, 1, braced_init_obstack);
 	      continue;
@@ -10224,11 +10311,7 @@ process_init_element (location_t loc, struct c_expr value, bool implicit,
 	  /* Otherwise, if we have come to a subaggregate,
 	     and we don't have an element of its type, push into it.  */
 	  else if (value.value != NULL_TREE
-		   && value.value != error_mark_node
-		   && TYPE_MAIN_VARIANT (TREE_TYPE (value.value)) != elttype
-		   && (eltcode == RECORD_TYPE || eltcode == ARRAY_TYPE
-		       || eltcode == UNION_TYPE
-		       || gnu_vector_type_p (elttype)))
+		   && initialize_elementwise_p (elttype, value.value))
 	    {
 	      push_init_level (loc, 1, braced_init_obstack);
 	      continue;
@@ -10590,7 +10673,9 @@ c_finish_return (location_t loc, tree retval, tree origtype)
 	  retval = TREE_OPERAND (retval, 0);
 	}
       retval = c_fully_fold (retval, false, NULL);
-      if (semantic_type)
+      if (semantic_type
+	  && valtype != NULL_TREE
+	  && TREE_CODE (valtype) != VOID_TYPE)
 	retval = build1 (EXCESS_PRECISION_EXPR, semantic_type, retval);
     }
 
@@ -14533,6 +14618,15 @@ c_finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
 		}
 	      if (c_oacc_check_attachments (c))
 		remove = true;
+	      if (OMP_CLAUSE_CODE (c) == OMP_CLAUSE_MAP
+		  && (OMP_CLAUSE_MAP_KIND (c) == GOMP_MAP_ATTACH
+		      || OMP_CLAUSE_MAP_KIND (c) == GOMP_MAP_DETACH))
+		/* In this case, we have a single array element which is a
+		   pointer, and we already set OMP_CLAUSE_SIZE in
+		   handle_omp_array_sections above.  For attach/detach clauses,
+		   reset the OMP_CLAUSE_SIZE (representing a bias) to zero
+		   here.  */
+		OMP_CLAUSE_SIZE (c) = size_zero_node;
 	      break;
 	    }
 	  if (t == error_mark_node)
@@ -14546,6 +14640,13 @@ c_finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
 	      remove = true;
 	      break;
 	    }
+	  if (OMP_CLAUSE_CODE (c) == OMP_CLAUSE_MAP
+	      && (OMP_CLAUSE_MAP_KIND (c) == GOMP_MAP_ATTACH
+		  || OMP_CLAUSE_MAP_KIND (c) == GOMP_MAP_DETACH))
+	    /* For attach/detach clauses, set OMP_CLAUSE_SIZE (representing a
+	       bias) to zero here, so it is not set erroneously to the pointer
+	       size later on in gimplify.c.  */
+	    OMP_CLAUSE_SIZE (c) = size_zero_node;
 	  if (TREE_CODE (t) == COMPONENT_REF
 	      && OMP_CLAUSE_CODE (c) != OMP_CLAUSE__CACHE_)
 	    {

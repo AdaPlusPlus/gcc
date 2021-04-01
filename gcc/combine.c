@@ -1485,6 +1485,7 @@ combine_instructions (rtx_insn *f, unsigned int nregs)
 	      if ((set = single_set (temp)) != 0
 		  && (note = find_reg_equal_equiv_note (temp)) != 0
 		  && (note = XEXP (note, 0), GET_CODE (note)) != EXPR_LIST
+		  && ! side_effects_p (SET_SRC (set))
 		  /* Avoid using a register that may already been marked
 		     dead by an earlier instruction.  */
 		  && ! unmentioned_reg_p (note, SET_SRC (set))
@@ -4351,25 +4352,29 @@ try_combine (rtx_insn *i3, rtx_insn *i2, rtx_insn *i1, rtx_insn *i0,
       if (GET_CODE (x) == PARALLEL)
 	x = XVECEXP (newi2pat, 0, 0);
 
-      /* It can only be a SET of a REG or of a SUBREG of a REG.  */
-      unsigned int regno = reg_or_subregno (SET_DEST (x));
-
-      bool done = false;
-      for (rtx_insn *insn = NEXT_INSN (i3);
-	   !done
-	   && insn
-	   && NONDEBUG_INSN_P (insn)
-	   && BLOCK_FOR_INSN (insn) == this_basic_block;
-	   insn = NEXT_INSN (insn))
+      if (REG_P (SET_DEST (x))
+	  || (GET_CODE (SET_DEST (x)) == SUBREG
+	      && REG_P (SUBREG_REG (SET_DEST (x)))))
 	{
-	  struct insn_link *link;
-	  FOR_EACH_LOG_LINK (link, insn)
-	    if (link->insn == i3 && link->regno == regno)
-	      {
-		link->insn = i2;
-		done = true;
-		break;
-	      }
+	  unsigned int regno = reg_or_subregno (SET_DEST (x));
+
+	  bool done = false;
+	  for (rtx_insn *insn = NEXT_INSN (i3);
+	       !done
+	       && insn
+	       && NONDEBUG_INSN_P (insn)
+	       && BLOCK_FOR_INSN (insn) == this_basic_block;
+	       insn = NEXT_INSN (insn))
+	    {
+	      struct insn_link *link;
+	      FOR_EACH_LOG_LINK (link, insn)
+		if (link->insn == i3 && link->regno == regno)
+		  {
+		    link->insn = i2;
+		    done = true;
+		    break;
+		  }
+	    }
 	}
     }
 
@@ -6639,7 +6644,10 @@ simplify_if_then_else (rtx x)
 
   /* Look for MIN or MAX.  */
 
-  if ((! FLOAT_MODE_P (mode) || flag_unsafe_math_optimizations)
+  if ((! FLOAT_MODE_P (mode)
+       || (flag_unsafe_math_optimizations
+	   && !HONOR_NANS (mode)
+	   && !HONOR_SIGNED_ZEROS (mode)))
       && comparison_p
       && rtx_equal_p (XEXP (cond, 0), true_rtx)
       && rtx_equal_p (XEXP (cond, 1), false_rtx)
@@ -10994,8 +11002,11 @@ simplify_shift_const_1 (enum rtx_code code, machine_mode result_mode,
 		break;
 	      /* For ((int) (cstLL >> count)) >> cst2 just give up.  Queuing
 		 up outer sign extension (often left and right shift) is
-		 hardly more efficient than the original.  See PR70429.  */
-	      if (code == ASHIFTRT && int_mode != int_result_mode)
+		 hardly more efficient than the original.  See PR70429.
+		 Similarly punt for rotates with different modes.
+		 See PR97386.  */
+	      if ((code == ASHIFTRT || code == ROTATE)
+		  && int_mode != int_result_mode)
 		break;
 
 	      rtx count_rtx = gen_int_shift_amount (int_result_mode, count);

@@ -1621,15 +1621,14 @@ Func_descriptor_expression::do_get_backend(Translate_context* context)
 	      || no->name().find("equal") != std::string::npos))
 	is_exported_runtime = true;
 
-      bool is_referenced_by_inline =
-	no->is_function() && no->func_value()->is_referenced_by_inline();
-
       bool is_hidden = ((no->is_function()
 			 && no->func_value()->enclosing() != NULL)
 			|| (Gogo::is_hidden_name(no->name())
-			    && !is_exported_runtime
-			    && !is_referenced_by_inline)
+			    && !is_exported_runtime)
 			|| Gogo::is_thunk(no));
+
+      if (no->is_function() && no->func_value()->is_referenced_by_inline())
+	is_hidden = false;
 
       bvar = context->backend()->immutable_struct(var_name, asm_name,
                                                   is_hidden, false,
@@ -16032,9 +16031,17 @@ Composite_literal_key_expression::do_lower(Gogo* gogo, Named_object*,
   Named_object* no = gogo->lookup(this->name_, NULL);
   if (no == NULL)
     {
-      go_error_at(this->location(), "reference to undefined name %qs",
-		  Gogo::message_name(this->name_).c_str());
-      return Expression::make_error(this->location());
+      // Gogo::lookup doesn't look in the global namespace, and names
+      // used in composite literal keys aren't seen by
+      // Gogo::define_global_names, so we have to look in the global
+      // namespace ourselves.
+      no = gogo->lookup_global(Gogo::unpack_hidden_name(this->name_).c_str());
+      if (no == NULL)
+	{
+	  go_error_at(this->location(), "reference to undefined name %qs",
+		      Gogo::message_name(this->name_).c_str());
+	  return Expression::make_error(this->location());
+	}
     }
   return Expression::make_unknown_reference(no, this->location());
 }

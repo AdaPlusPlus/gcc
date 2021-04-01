@@ -1,3 +1,172 @@
+2021-03-29  Marek Polacek  <polacek@redhat.com>
+
+	Backported from master:
+	2021-02-16  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/99062
+	* c-attribs.c (handle_assume_aligned_attribute): Check that the
+	alignment argument is non-negative.  Tweak a warning message.
+
+2021-03-24  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* c-common.c (c_common_reswords): Add 'atomic' property
+	attribute.
+	* c-common.h (enum rid): Add RID_PROPATOMIC for atomic
+	property attributes.
+
+2021-03-24  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* c-objc.h (enum objc_property_attribute_group): New
+	(enum objc_property_attribute_kind): New.
+	(OBJC_PROPATTR_GROUP_MASK): New.
+	(struct property_attribute_info): Small class encapsulating
+	parser output from property attributes.
+	(objc_prop_attr_kind_for_rid): New
+	(objc_add_property_declaration): Simplify interface.
+	* stub-objc.c (enum rid): Dummy type.
+	(objc_add_property_declaration): Simplify interface.
+	(objc_prop_attr_kind_for_rid): New.
+
+2021-03-24  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* c-lex.c (c_lex_with_flags): When combining '@' with a
+	keyword for Objective-C, combine the location ranges too.
+
+2021-03-19  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2021-03-03  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/99324
+	* c-common.c (build_va_arg): Call c_common_mark_addressable_vec
+	instead of mark_addressable.  Fix a comment typo -
+	neutrallly -> neutrally.
+
+2021-01-14  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backported from master:
+	2020-11-04  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* c-objc.h (objc_non_constant_expr_p): New.
+	* stub-objc.c (objc_non_constant_expr_p): New.
+
+2021-01-06  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-12-08  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/98187
+	* c-pragma.c (omp_pragmas): Remove "master".
+	(omp_pragmas_simd): Add "master".
+
+2020-11-12  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-11-10  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/97748
+	* c-common.h (warn_if_unused_value): Add quiet argument defaulted
+	to false.
+	* c-warn.c (warn_if_unused_value): Likewise.  Pass it down
+	recursively and just return true instead of warning if it is true.
+	Handle COMPLEX_EXPR.
+
+2020-11-12  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-11-06  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-common.c (verify_sequence_points): Remove DEBUG_FUNCTION.
+
+2020-10-16  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-10-05  Richard Biener  <rguenther@suse.de>
+		    Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/97197
+	* c-pretty-print.c: Include langhooks.h.
+	(c_pretty_printer::postfix_expression): Handle TARGET_MEM_REF as
+	expression.
+	(c_pretty_printer::expression): Handle TARGET_MEM_REF as
+	unary_expression.
+	(c_pretty_printer::unary_expression): Handle TARGET_MEM_REF.
+
+2020-08-25  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-08-11  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/96545
+	* c-common.c (get_atomic_generic_size): Require that first argument's
+	type points to a complete type and use tree_fits_uhwi_p instead of
+	just INTEGER_CST TREE_CODE check for the TYPE_SIZE_UNIT.
+
+2020-07-23  Release Manager
+
+	* GCC 10.2.0 released.
+
+2020-06-29  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from master:
+	2020-06-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/95903
+	* c-common.c (pointer_int_sum): Use TYPE_OVERFLOW_UNDEFINED instead of
+	!TYPE_UNSIGNED check to see if we can apply distributive law and handle
+	smaller precision intop operands separately.
+
+2020-06-14  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/95580
+	* c-pretty-print.c (c_pretty_printer::unary_expression): Handle the
+	case when MEM_REF's first argument has type pointer to incomplete type.
+
+202-05-07  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/94968
+	* c-common.c (speculation_safe_value_resolve_params): Return false if
+	error_operand_p (val2).
+	(resolve_overloaded_builtin) <case BUILT_IN_SPECULATION_SAFE_VALUE_N>:
+	Remove extraneous semicolon.
+
+2020-05-07  Release Manager
+
+	* GCC 10.1.0 released.
+
+2020-04-29  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-format.c (PP_FORMAT_CHAR_TABLE): Add %{ and %}.
+
+2020-04-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/94755
+	* c-common.c (resolve_overloaded_builtin): Return error_mark_node for
+	fncode == BUILT_IN_NONE before initialization of first_param.
+
+2020-04-23  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/94733
+	* c-attribs.c (find_tm_attribute): Use get_attribute_name instead of
+	TREE_PURPOSE.
+
+2020-04-14  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/85278
+	* c-pretty-print.c (pp_c_pointer) <case REFERENCE_TYPE>: Print a double
+	ampersand if it's an rvalue reference type.
+
+2020-04-13  Martin Sebor  <msebor@redhat.com>
+
+	PR c/92326
+	* c-pretty-print.c (c_pretty_printer::direct_abstract_declarator): Avoid
+	printing array bound for flexible array members.
+
+2020-04-13  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* c-cppbuiltin.c (c_cpp_builtins): Update coroutines builtin
+	define, per n4861.
+
 2020-04-02  Richard Biener  <rguenther@suse.de>
 
 	PR c/94392

@@ -556,8 +556,9 @@ remap_type_1 (tree type, copy_body_data *id)
 	  /* For array bounds where we have decided not to copy over the bounds
 	     variable which isn't used in OpenMP/OpenACC region, change them to
 	     an uninitialized VAR_DECL temporary.  */
-	  if (TYPE_MAX_VALUE (TYPE_DOMAIN (new_tree)) == error_mark_node
-	      && id->adjust_array_error_bounds
+	  if (id->adjust_array_error_bounds
+	      && TYPE_DOMAIN (new_tree)
+	      && TYPE_MAX_VALUE (TYPE_DOMAIN (new_tree)) == error_mark_node
 	      && TYPE_MAX_VALUE (TYPE_DOMAIN (type)) != error_mark_node)
 	    {
 	      tree v = create_tmp_var (TREE_TYPE (TYPE_DOMAIN (new_tree)));
@@ -1953,6 +1954,37 @@ remap_gimple_stmt (gimple *stmt, copy_body_data *id)
     {
       gimple_set_vdef (copy, NULL_TREE);
       gimple_set_vuse (copy, NULL_TREE);
+    }
+
+  if (cfun->can_throw_non_call_exceptions)
+    {
+      /* When inlining a function which does not have non-call exceptions
+	 enabled into a function that has (which only happens with
+	 always-inline) we have to fixup stmts that cannot throw.  */
+      if (gcond *cond = dyn_cast <gcond *> (copy))
+	if (gimple_could_trap_p (cond))
+	  {
+	    gassign *cmp
+	      = gimple_build_assign (make_ssa_name (boolean_type_node),
+				     gimple_cond_code (cond),
+				     gimple_cond_lhs (cond),
+				     gimple_cond_rhs (cond));
+	    gimple_seq_add_stmt (&stmts, cmp);
+	    gimple_cond_set_code (cond, NE_EXPR);
+	    gimple_cond_set_lhs (cond, gimple_assign_lhs (cmp));
+	    gimple_cond_set_rhs (cond, boolean_false_node);
+	  }
+      if (gassign *ass = dyn_cast <gassign *> (copy))
+	if ((gimple_assign_rhs_code (ass) == COND_EXPR
+	     || gimple_assign_rhs_code (ass) == VEC_COND_EXPR)
+	    && gimple_could_trap_p (ass))
+	  {
+	    gassign *cmp
+	      = gimple_build_assign (make_ssa_name (boolean_type_node),
+				     gimple_assign_rhs1 (ass));
+	    gimple_seq_add_stmt (&stmts, cmp);
+	    gimple_assign_set_rhs1 (ass, gimple_assign_lhs (cmp));
+	  }
     }
 
   gimple_seq_add_stmt (&stmts, copy);
@@ -5468,6 +5500,7 @@ optimize_inline_calls (tree fn)
   number_blocks (fn);
 
   delete_unreachable_blocks_update_callgraph (id.dst_node, false);
+  id.dst_node->calls_comdat_local = id.dst_node->check_calls_comdat_local_p ();
 
   if (flag_checking)
     id.dst_node->verify ();

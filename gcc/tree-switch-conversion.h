@@ -71,7 +71,7 @@ public:
   virtual void dump (FILE *f, bool details = false) = 0;
 
   /* Emit GIMPLE code to handle the cluster.  */
-  virtual void emit (tree, tree, tree, basic_block) = 0;
+  virtual void emit (tree, tree, tree, basic_block, location_t) = 0;
 
   /* Return true if a cluster handles only a single case value and the
      value is not a range.  */
@@ -84,11 +84,10 @@ public:
      then return 0.  */
   static unsigned HOST_WIDE_INT get_range (tree low, tree high)
   {
-    tree r = fold_build2 (MINUS_EXPR, TREE_TYPE (low), high, low);
-    if (!tree_fits_uhwi_p (r))
+    wide_int w = wi::to_wide (high) - wi::to_wide (low);
+    if (wi::neg_p (w, TYPE_SIGN (TREE_TYPE (low))) || !wi::fits_uhwi_p (w))
       return 0;
-
-    return tree_to_uhwi (r) + 1;
+    return w.to_uhwi () + 1;
   }
 
   /* Case label.  */
@@ -165,7 +164,7 @@ public:
     fprintf (f, " ");
   }
 
-  void emit (tree, tree, tree, basic_block)
+  void emit (tree, tree, tree, basic_block, location_t)
   {
     gcc_unreachable ();
   }
@@ -251,7 +250,7 @@ public:
   }
 
   void emit (tree index_expr, tree index_type,
-	     tree default_label_expr, basic_block default_bb);
+	     tree default_label_expr, basic_block default_bb, location_t loc);
 
   /* Find jump tables of given CLUSTERS, where all members of the vector
      are of type simple_cluster.  New clusters are returned.  */
@@ -369,7 +368,7 @@ public:
     There *MUST* be max_case_bit_tests or less unique case
     node targets.  */
   void emit (tree index_expr, tree index_type,
-	     tree default_label_expr, basic_block default_bb);
+	     tree default_label_expr, basic_block default_bb, location_t loc);
 
   /* Find bit tests of given CLUSTERS, where all members of the vector
      are of type simple_cluster.  New clusters are returned.  */

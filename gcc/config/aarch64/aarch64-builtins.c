@@ -43,6 +43,8 @@
 #include "gimple-iterator.h"
 #include "case-cfn-macros.h"
 #include "emit-rtl.h"
+#include "stringpool.h"
+#include "attribs.h"
 
 #define v8qi_UP  E_V8QImode
 #define v4hi_UP  E_V4HImode
@@ -802,10 +804,14 @@ aarch64_init_simd_builtin_types (void)
 
       if (aarch64_simd_types[i].itype == NULL)
 	{
-	  aarch64_simd_types[i].itype
-	    = build_distinct_type_copy
-	      (build_vector_type (eltype, GET_MODE_NUNITS (mode)));
-	  SET_TYPE_STRUCTURAL_EQUALITY (aarch64_simd_types[i].itype);
+	  tree type = build_vector_type (eltype, GET_MODE_NUNITS (mode));
+	  type = build_distinct_type_copy (type);
+	  SET_TYPE_STRUCTURAL_EQUALITY (type);
+
+	  TYPE_ATTRIBUTES (type)
+	    = tree_cons (get_identifier ("Advanced SIMD type"),
+			 NULL_TREE, TYPE_ATTRIBUTES (type));
+	  aarch64_simd_types[i].itype = type;
 	}
 
       tdecl = add_builtin_type (aarch64_simd_types[i].name,
@@ -1217,8 +1223,9 @@ aarch64_init_memtag_builtins (void)
     = aarch64_general_add_builtin ("__builtin_aarch64_memtag_"#N, \
 				   T, AARCH64_MEMTAG_BUILTIN_##F); \
   aarch64_memtag_builtin_data[AARCH64_MEMTAG_BUILTIN_##F - \
-			      AARCH64_MEMTAG_BUILTIN_START - 1] = \
-				{T, CODE_FOR_##I};
+			      AARCH64_MEMTAG_BUILTIN_START - 1].ftype = T; \
+  aarch64_memtag_builtin_data[AARCH64_MEMTAG_BUILTIN_##F - \
+			      AARCH64_MEMTAG_BUILTIN_START - 1].icode = CODE_FOR_##I;
 
   fntype = build_function_type_list (ptr_type_node, ptr_type_node,
 				     uint64_type_node, NULL);
@@ -1798,7 +1805,7 @@ aarch64_expand_rng_builtin (tree exp, rtx target, int fcode, int ignore)
     return target;
 
   rtx cc_reg = gen_rtx_REG (CC_Zmode, CC_REGNUM);
-  rtx cmp_rtx = gen_rtx_fmt_ee (NE, SImode, cc_reg, const0_rtx);
+  rtx cmp_rtx = gen_rtx_fmt_ee (EQ, SImode, cc_reg, const0_rtx);
   emit_insn (gen_aarch64_cstoresi (target, cmp_rtx, cc_reg));
   return target;
 }
@@ -1970,14 +1977,14 @@ aarch64_general_expand_builtin (unsigned int fcode, tree exp, rtx target,
       return target;
 
     case AARCH64_JSCVT:
-      arg0 = CALL_EXPR_ARG (exp, 0);
-      op0 = force_reg (DFmode, expand_normal (arg0));
-      if (!target)
-	target = gen_reg_rtx (SImode);
-      else
-	target = force_reg (SImode, target);
-      emit_insn (GEN_FCN (CODE_FOR_aarch64_fjcvtzs) (target, op0));
-      return target;
+      {
+	expand_operand ops[2];
+	create_output_operand (&ops[0], target, SImode);
+	op0 = expand_normal (CALL_EXPR_ARG (exp, 0));
+	create_input_operand (&ops[1], op0, DFmode);
+	expand_insn (CODE_FOR_aarch64_fjcvtzs, 2, ops);
+	return ops[0].value;
+      }
 
     case AARCH64_SIMD_BUILTIN_FCMLA_LANEQ0_V2SF:
     case AARCH64_SIMD_BUILTIN_FCMLA_LANEQ90_V2SF:
@@ -2313,10 +2320,12 @@ aarch64_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
   mask_sr = build_int_cst (unsigned_type_node,
 			   ~(AARCH64_FE_ALL_EXCEPT));
 
-  ld_fenv_cr = build2 (MODIFY_EXPR, unsigned_type_node,
-		       fenv_cr, build_call_expr (get_fpcr, 0));
-  ld_fenv_sr = build2 (MODIFY_EXPR, unsigned_type_node,
-		       fenv_sr, build_call_expr (get_fpsr, 0));
+  ld_fenv_cr = build4 (TARGET_EXPR, unsigned_type_node,
+		       fenv_cr, build_call_expr (get_fpcr, 0),
+		       NULL_TREE, NULL_TREE);
+  ld_fenv_sr = build4 (TARGET_EXPR, unsigned_type_node,
+		       fenv_sr, build_call_expr (get_fpsr, 0),
+		       NULL_TREE, NULL_TREE);
 
   masked_fenv_cr = build2 (BIT_AND_EXPR, unsigned_type_node, fenv_cr, mask_cr);
   masked_fenv_sr = build2 (BIT_AND_EXPR, unsigned_type_node, fenv_sr, mask_sr);
@@ -2348,8 +2357,9 @@ aarch64_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
        __atomic_feraiseexcept (new_fenv_var);  */
 
   new_fenv_var = create_tmp_var_raw (unsigned_type_node);
-  reload_fenv = build2 (MODIFY_EXPR, unsigned_type_node,
-			new_fenv_var, build_call_expr (get_fpsr, 0));
+  reload_fenv = build4 (TARGET_EXPR, unsigned_type_node,
+			new_fenv_var, build_call_expr (get_fpsr, 0),
+			NULL_TREE, NULL_TREE);
   restore_fnenv = build_call_expr (set_fpsr, 1, fenv_sr);
   atomic_feraiseexcept = builtin_decl_implicit (BUILT_IN_ATOMIC_FERAISEEXCEPT);
   update_call = build_call_expr (atomic_feraiseexcept, 1,

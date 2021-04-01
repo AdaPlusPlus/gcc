@@ -2121,8 +2121,14 @@ register_edge_assert_for_2 (tree name, edge e,
 	      && ((TYPE_PRECISION (TREE_TYPE (name))
 		   > TYPE_PRECISION (TREE_TYPE (rhs1)))
 		  || (get_range_info (rhs1, &rmin, &rmax) == VR_RANGE
-		      && wi::fits_to_tree_p (rmin, TREE_TYPE (name))
-		      && wi::fits_to_tree_p (rmax, TREE_TYPE (name)))))
+		      && wi::fits_to_tree_p
+			   (widest_int::from (rmin,
+					      TYPE_SIGN (TREE_TYPE (rhs1))),
+			    TREE_TYPE (name))
+		      && wi::fits_to_tree_p
+			   (widest_int::from (rmax,
+					      TYPE_SIGN (TREE_TYPE (rhs1))),
+			    TREE_TYPE (name)))))
 	    add_assert_info (asserts, rhs1, rhs1,
 		 	     comp_code, fold_convert (TREE_TYPE (rhs1), val));
 	}
@@ -3843,15 +3849,11 @@ vrp_prop::check_mem_ref (location_t location, tree ref,
       else
 	arrbounds[1] = wi::lrshift (maxobjsize, wi::floor_log2 (eltsize));
 
-      if (TREE_CODE (ref) == MEM_REF)
-	{
-	  /* For MEM_REF determine a tighter bound of the non-array
-	     element type.  */
-	  tree eltype = TREE_TYPE (reftype);
-	  while (TREE_CODE (eltype) == ARRAY_TYPE)
-	    eltype = TREE_TYPE (eltype);
-	  eltsize = wi::to_offset (TYPE_SIZE_UNIT (eltype));
-	}
+      /* Determine a tighter bound of the non-array element type.  */
+      tree eltype = TREE_TYPE (reftype);
+      while (TREE_CODE (eltype) == ARRAY_TYPE)
+	eltype = TREE_TYPE (eltype);
+      eltsize = wi::to_offset (TYPE_SIZE_UNIT (eltype));
     }
   else
     {
@@ -3884,27 +3886,17 @@ vrp_prop::check_mem_ref (location_t location, tree ref,
       if (TREE_CODE (reftype) != ARRAY_TYPE)
 	reftype = build_array_type_nelts (reftype, 1);
 
-      if (TREE_CODE (ref) == MEM_REF)
+      /* Extract the element type out of MEM_REF and use its size
+	 to compute the index to print in the diagnostic; arrays
+	 in MEM_REF don't mean anything.  A type with no size like
+	 void is as good as having a size of 1.  */
+      tree type = TREE_TYPE (ref);
+      while (TREE_CODE (type) == ARRAY_TYPE)
+	type = TREE_TYPE (type);
+      if (tree size = TYPE_SIZE_UNIT (type))
 	{
-	  /* Extract the element type out of MEM_REF and use its size
-	     to compute the index to print in the diagnostic; arrays
-	     in MEM_REF don't mean anything.  A type with no size like
-	     void is as good as having a size of 1.  */
-	  tree type = TREE_TYPE (ref);
-	  while (TREE_CODE (type) == ARRAY_TYPE)
-	    type = TREE_TYPE (type);
-	  if (tree size = TYPE_SIZE_UNIT (type))
-	    {
-	      offrange[0] = offrange[0] / wi::to_offset (size);
-	      offrange[1] = offrange[1] / wi::to_offset (size);
-	    }
-	}
-      else
-	{
-	  /* For anything other than MEM_REF, compute the index to
-	     print in the diagnostic as the offset over element size.  */
-	  offrange[0] = offrange[0] / eltsize;
-	  offrange[1] = offrange[1] / eltsize;
+	  offrange[0] = offrange[0] / wi::to_offset (size);
+	  offrange[1] = offrange[1] / wi::to_offset (size);
 	}
 
       bool warned;

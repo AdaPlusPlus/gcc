@@ -1,3 +1,73 @@
+2021-03-09  Ian Lance Taylor  <iant@golang.org>
+
+	PR go/99458
+	* libgo/runtime/proc.c: cast SIGSTKSZ to uintptr
+	In newer versions of glibc it is long, which causes a signed
+	comparison warning.
+
+2021-01-03  Iain Sandoe  <iain@sandoe.co.uk>
+	    Jakub Jelinek   <jakub@redhat.com>
+
+	PR target/97865
+	* libtool.m4: Update handling of Darwin platform link flags
+	for Darwin20.
+
+2020-11-25  Martin Liska  <mliska@suse.cz>
+
+	* .gitignore: Add .clang-tidy.
+
+2020-10-06  Tobias Burnus  <tobias@codesourcery.com>
+
+	Backported from master:
+	2020-10-06  Tobias Burnus  <tobias@codesourcery.com>
+
+	PR target/97302
+	* configure.ac: Only set with_gmp to /usr/local
+	if not building in tree.
+	* configure: Regenerate.
+
+2020-07-23  Release Manager
+
+	* GCC 10.2.0 released.
+
+2020-05-07  Release Manager
+
+	* GCC 10.1.0 released.
+
+2020-04-29  Thomas Schwinge  <thomas@codesourcery.com>
+
+	PR target/92713
+	* configure.ac ["${ENABLE_LIBSTDCXX}" = "default" && amdgcn*-*-*]
+	(noconfigdirs): Add 'target-libstdc++-v3'.
+	* configure: Regenerate.
+
+2020-04-21  Stephen Casner  <casner@acm.org>
+
+	PR 25830
+	* configure.ac (noconfigdirs): Exclude gdb & gprof for pdp11.
+	* configure: Rebuild.
+
+2020-04-17  Martin Liska  <mliska@suse.cz>
+	    Jonathan Yong <10walls@gmail.com>
+
+	PR gcov-profile/94570
+	* ltmain.sh: Do not define HAVE_DOS_BASED_FILE_SYSTEM
+	for CYGWIN.
+
+2020-04-14  Martin Jambor  <mjambor@suse.cz>
+
+	* MAINTAINERS (Reviewers): Add myself as callgraph (IPA) reviewer.
+
+2020-04-09  Tom Tromey  <tom@tromey.com>
+
+	* configure: Rebuild.
+	* Makefile.in: Rebuild.
+	* Makefile.def (gdbsupport, gdbserver): New host modules.
+	(configure-gdb): Depend on all-gdbsupport.
+	(all-gdb): Depend on all-gdbsupport, all-libctf.
+	* configure.ac (host_tools): Add gdbserver.
+	Conditionally build gdbserver and gdbsupport.
+
 2020-03-09  Tobias Burnus  <tobias@codesourcery.com>
 
 	* configure.ac: Build libgomp by default for amdgcn.

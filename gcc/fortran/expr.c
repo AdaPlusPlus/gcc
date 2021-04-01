@@ -2096,6 +2096,9 @@ simplify_parameter_variable (gfc_expr *p, int type)
 	return false;
 
       e->rank = p->rank;
+
+      if (e->ts.type == BT_CHARACTER && p->ts.u.cl)
+	e->ts = p->ts;
     }
 
   if (e->ts.type == BT_CHARACTER && e->ts.u.cl == NULL)
@@ -2904,7 +2907,7 @@ gfc_check_init_expr (gfc_expr *e)
 		   && (e->value.function.isym->conversion == 1);
 
 	if (!conversion && (!gfc_is_intrinsic (sym, 0, e->where)
-	    || (m = gfc_intrinsic_func_interface (e, 0)) != MATCH_YES))
+	    || (m = gfc_intrinsic_func_interface (e, 0)) == MATCH_NO))
 	  {
 	    gfc_error ("Function %qs in initialization expression at %L "
 		       "must be an intrinsic function",
@@ -4271,7 +4274,20 @@ gfc_check_pointer_assign (gfc_expr *lvalue, gfc_expr *rvalue,
       gfc_symbol *sym;
       bool target;
 
-      gcc_assert (rvalue->symtree);
+      if (gfc_is_size_zero_array (rvalue))
+	{
+	  gfc_error ("Zero-sized array detected at %L where an entity with "
+		     "the TARGET attribute is expected", &rvalue->where);
+	  return false;
+	}
+      else if (!rvalue->symtree)
+	{
+	  gfc_error ("Pointer assignment target in initialization expression "
+		     "does not have the TARGET attribute at %L",
+		     &rvalue->where);
+	  return false;
+	}
+
       sym = rvalue->symtree->n.sym;
 
       if (sym->ts.type == BT_CLASS && sym->attr.class_ok)
@@ -4346,7 +4362,9 @@ gfc_check_pointer_assign (gfc_expr *lvalue, gfc_expr *rvalue,
      contiguous.  Be lenient in the definition of what counts as
      contiguous.  */
 
-  if (lhs_attr.contiguous && !gfc_is_simply_contiguous (rvalue, false, true))
+  if (lhs_attr.contiguous
+      && lhs_attr.dimension > 0
+      && !gfc_is_simply_contiguous (rvalue, false, true))
     gfc_warning (OPT_Wextra, "Assignment to contiguous pointer from "
 		 "non-contiguous target at %L", &rvalue->where);
 

@@ -2202,7 +2202,7 @@ Expression *Type::noMember(Scope *sc, Expression *e, Identifier *ident, int flag
 
     static int nest;      // https://issues.dlang.org/show_bug.cgi?id=17380
 
-    if (++nest > 500)
+    if (++nest > global.recursionLimit)
     {
       ::error(e->loc, "cannot resolve identifier `%s`", ident->toChars());
       --nest;
@@ -5449,7 +5449,7 @@ Type *TypeFunction::semantic(Loc loc, Scope *sc)
 
     bool errors = false;
 
-    if (inuse > 500)
+    if (inuse > global.recursionLimit)
     {
         inuse = 0;
         ::error(loc, "recursive type");
@@ -7319,6 +7319,12 @@ void TypeTypeof::resolve(Loc loc, Scope *sc, Expression **pe, Type **pt, Dsymbol
 
     //printf("TypeTypeof::resolve(sc = %p, idents = '%s')\n", sc, toChars());
     //static int nest; if (++nest == 50) *(char*)0=0;
+    if (sc == NULL)
+    {
+        *pt = Type::terror;
+        error(loc, "Invalid scope.");
+        return;
+    }
     if (inuse)
     {
         inuse = 2;

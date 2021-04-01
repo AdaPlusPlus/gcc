@@ -1982,24 +1982,8 @@ append_attrname (const std::pair<int, attr_access> &access,
    in the function call EXP.  */
 
 static void
-maybe_warn_rdwr_sizes (rdwr_map *rwm, tree exp)
+maybe_warn_rdwr_sizes (rdwr_map *rwm, tree fndecl, tree fntype, tree exp)
 {
-  tree fndecl = NULL_TREE;
-  tree fntype = NULL_TREE;
-  if (tree fnaddr = CALL_EXPR_FN (exp))
-    {
-      if (TREE_CODE (fnaddr) == ADDR_EXPR)
-	{
-	  fndecl = TREE_OPERAND (fnaddr, 0);
-	  fntype = TREE_TYPE (fndecl);
-	}
-      else
-	fntype = TREE_TYPE (TREE_TYPE (fnaddr));
-    }
-
-  if (!fntype)
-    return;
-
   /* A string describing the attributes that the warnings issued by this
      function apply to.  Used to print one informational note per function
      call, rather than one per warning.  That reduces clutter.  */
@@ -2324,19 +2308,17 @@ initialize_argument_information (int num_actuals ATTRIBUTE_UNUSED,
       function_arg_info arg (type, argpos < n_named_args);
       if (pass_by_reference (args_so_far_pnt, arg))
 	{
-	  bool callee_copies;
-	  tree base = NULL_TREE;
+	  const bool callee_copies
+	    = reference_callee_copied (args_so_far_pnt, arg);
+	  tree base;
 
-	  callee_copies = reference_callee_copied (args_so_far_pnt, arg);
-
-	  /* If we're compiling a thunk, pass through invisible references
-	     instead of making a copy.  */
-	  if (call_from_thunk_p
-	      || (callee_copies
-		  && !TREE_ADDRESSABLE (type)
-		  && (base = get_base_address (args[i].tree_value))
-		  && TREE_CODE (base) != SSA_NAME
-		  && (!DECL_P (base) || MEM_P (DECL_RTL (base)))))
+	  /* If we're compiling a thunk, pass directly the address of an object
+	     already in memory, instead of making a copy.  Likewise if we want
+	     to make the copy in the callee instead of the caller.  */
+	  if ((call_from_thunk_p || callee_copies)
+	      && (base = get_base_address (args[i].tree_value))
+	      && TREE_CODE (base) != SSA_NAME
+	      && (!DECL_P (base) || MEM_P (DECL_RTL (base))))
 	    {
 	      /* We may have turned the parameter value into an SSA name.
 		 Go back to the original parameter so we can take the
@@ -2560,7 +2542,7 @@ initialize_argument_information (int num_actuals ATTRIBUTE_UNUSED,
   maybe_warn_nonstring_arg (fndecl, exp);
 
   /* Check read_only, write_only, and read_write arguments.  */
-  maybe_warn_rdwr_sizes (&rdwr_idx, exp);
+  maybe_warn_rdwr_sizes (&rdwr_idx, fndecl, fntype, exp);
 }
 
 /* Update ARGS_SIZE to contain the total size for the argument block.
@@ -6259,6 +6241,21 @@ must_pass_va_arg_in_stack (tree type)
 {
   function_arg_info arg (type, /*named=*/false);
   return targetm.calls.must_pass_in_stack (arg);
+}
+
+/* Return true if FIELD is the C++17 empty base field that should
+   be ignored for ABI calling convention decisions in order to
+   maintain ABI compatibility between C++14 and earlier, which doesn't
+   add this FIELD to classes with empty bases, and C++17 and later
+   which does.  */
+
+bool
+cxx17_empty_base_field_p (const_tree field)
+{
+  return (DECL_FIELD_ABI_IGNORED (field)
+	  && DECL_ARTIFICIAL (field)
+	  && RECORD_OR_UNION_TYPE_P (TREE_TYPE (field))
+	  && !lookup_attribute ("no_unique_address", DECL_ATTRIBUTES (field)));
 }
 
 /* Tell the garbage collector about GTY markers in this source file.  */

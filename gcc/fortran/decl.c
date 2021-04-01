@@ -696,6 +696,10 @@ gfc_match_data (void)
 	  /* F2008:C567 (R536) A data-i-do-object or a variable that appears
 	     as a data-stmt-object shall not be an object designator in which
 	     a pointer appears other than as the entire rightmost part-ref.  */
+	  if (!e->ref && e->ts.type == BT_DERIVED
+	      && e->symtree->n.sym->attr.pointer)
+	    goto partref;
+
 	  ref = e->ref;
 	  if (e->symtree->n.sym->ts.type == BT_DERIVED
 	      && e->symtree->n.sym->attr.pointer
@@ -724,7 +728,7 @@ gfc_match_data (void)
 	  gfc_constructor *c;
 	  c = gfc_constructor_first (new_data->value->expr->value.constructor);
 	  for (; c; c = gfc_constructor_next (c))
-	    if (c->expr->ts.type == BT_BOZ)
+	    if (c->expr && c->expr->ts.type == BT_BOZ)
 	      {
 		gfc_error ("BOZ literal constant at %L cannot appear in a "
 			   "structure constructor", &c->expr->where);
@@ -1073,6 +1077,11 @@ char_len_param_value (gfc_expr **expr, bool *deferred)
   if (!gfc_expr_check_typed (*expr, gfc_current_ns, false))
     return MATCH_ERROR;
 
+  /* If gfortran gets an EXPR_OP, try to simplifiy it.  This catches things
+     like CHARACTER(([1])).   */
+  if ((*expr)->expr_type == EXPR_OP)
+    gfc_simplify_expr (*expr, 1);
+
   if ((*expr)->expr_type == EXPR_FUNCTION)
     {
       if ((*expr)->ts.type == BT_INTEGER
@@ -1136,6 +1145,9 @@ char_len_param_value (gfc_expr **expr, bool *deferred)
 
       gfc_free_expr (e);
     }
+
+  if (gfc_seen_div0)
+    m = MATCH_ERROR;
 
   return m;
 
@@ -2900,6 +2912,15 @@ variable_decl (int elem)
     }
 
   if (gfc_current_state () == COMP_DERIVED
+      && initializer && initializer->ts.type == BT_HOLLERITH)
+    {
+      gfc_error ("Initialization of structure component with a HOLLERITH "
+		 "constant at %L is not allowed", &initializer->where);
+      m = MATCH_ERROR;
+      goto cleanup;
+    }
+
+  if (gfc_current_state () == COMP_DERIVED
       && gfc_current_block ()->attr.pdt_template)
     {
       gfc_symbol *param;
@@ -4061,7 +4082,8 @@ match_byte_typespec (gfc_typespec *ts)
 match
 gfc_match_decl_type_spec (gfc_typespec *ts, int implicit_flag)
 {
-  char name[GFC_MAX_SYMBOL_LEN + 1];
+  /* Provide sufficient space to hold "pdtsymbol".  */
+  char *name = XALLOCAVEC (char, GFC_MAX_SYMBOL_LEN + 1);
   gfc_symbol *sym, *dt_sym;
   match m;
   char c;
@@ -4094,7 +4116,7 @@ gfc_match_decl_type_spec (gfc_typespec *ts, int implicit_flag)
       gfc_gobble_whitespace ();
       if (gfc_peek_ascii_char () == '*')
 	{
-	  if ((m = gfc_match ("*)")) != MATCH_YES)
+	  if ((m = gfc_match ("* ) ")) != MATCH_YES)
 	    return m;
 	  if (gfc_comp_struct (gfc_current_state ()))
 	    {
@@ -4251,7 +4273,13 @@ gfc_match_decl_type_spec (gfc_typespec *ts, int implicit_flag)
 	    return m;
 	  gcc_assert (!sym->attr.pdt_template && sym->attr.pdt_type);
 	  ts->u.derived = sym;
-	  strcpy (name, gfc_dt_lower_string (sym->name));
+	  const char* lower = gfc_dt_lower_string (sym->name);
+	  size_t len = strlen (lower);
+	  /* Reallocate with sufficient size.  */
+	  if (len > GFC_MAX_SYMBOL_LEN)
+	    name = XALLOCAVEC (char, len + 1);
+	  memcpy (name, lower, len);
+	  name[len] = '\0';
 	}
 
       if (sym && sym->attr.flavor == FL_STRUCT)
@@ -7362,6 +7390,7 @@ gfc_match_function_decl (void)
      procedure interface body.  */
     if (sym->attr.is_bind_c && sym->attr.module_procedure && sym->old_symbol
   	&& strcmp (sym->name, sym->old_symbol->name) == 0
+	&& sym->binding_label && sym->old_symbol->binding_label
 	&& strcmp (sym->binding_label, sym->old_symbol->binding_label) != 0)
       {
 	  const char *null = "NULL", *s1, *s2;
@@ -7877,6 +7906,7 @@ gfc_match_subroutine (void)
 	 procedure interface body.  */
       if (sym->attr.module_procedure && sym->old_symbol
   	  && strcmp (sym->name, sym->old_symbol->name) == 0
+	  && sym->binding_label && sym->old_symbol->binding_label
 	  && strcmp (sym->binding_label, sym->old_symbol->binding_label) != 0)
 	{
 	  const char *null = "NULL", *s1, *s2;
@@ -9035,7 +9065,7 @@ access_attr_decl (gfc_statement st)
 	  else
 	    {
 	      gfc_error ("Access specification of the .%s. operator at %C "
-			 "has already been specified", sym->name);
+			 "has already been specified", uop->name);
 	      goto done;
 	    }
 
@@ -9773,6 +9803,15 @@ gfc_match_submod_proc (void)
 
   if (gfc_match_eos () != MATCH_YES)
     {
+      /* Unset st->n.sym. Note: in reject_statement (), the symbol changes are
+	 undone, such that the st->n.sym->formal points to the original symbol;
+	 if now this namespace is finalized, the formal namespace is freed,
+	 but it might be still needed in the parent namespace.  */
+      gfc_symtree *st = gfc_find_symtree (gfc_current_ns->sym_root, sym->name);
+      st->n.sym = NULL;
+      gfc_free_symbol (sym->tlink);
+      sym->tlink = NULL;
+      sym->refs--;
       gfc_syntax_error (ST_MODULE_PROC);
       return MATCH_ERROR;
     }

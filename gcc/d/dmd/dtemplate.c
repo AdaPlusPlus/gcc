@@ -33,6 +33,7 @@
 #include "hdrgen.h"
 #include "id.h"
 #include "attrib.h"
+#include "cond.h"
 #include "tokens.h"
 
 #define IDX_NOTFOUND (0x12345678)               // index is not found
@@ -4337,6 +4338,13 @@ MATCH deduceType(RootObject *o, Scope *sc, Type *tparam, TemplateParameters *par
 
         void visit(ArrayLiteralExp *e)
         {
+            // https://issues.dlang.org/show_bug.cgi?id=20092
+            if (e->elements && e->elements->dim &&
+                e->type->toBasetype()->nextOf()->ty == Tvoid)
+            {
+                result = deduceEmptyArrayElement();
+                return;
+            }
             if ((!e->elements || !e->elements->dim) &&
                 e->type->toBasetype()->nextOf()->ty == Tvoid &&
                 tparam->ty == Tarray)
@@ -5932,10 +5940,10 @@ void TemplateInstance::tryExpandMembers(Scope *sc2)
     static int nest;
     // extracted to a function to allow windows SEH to work without destructors in the same function
     //printf("%d\n", nest);
-    if (++nest > 500)
+    if (++nest > global.recursionLimit)
     {
         global.gag = 0;                 // ensure error message gets printed
-        error("recursive expansion");
+        error("recursive expansion exceeded allowed nesting limit");
         fatal();
     }
 
@@ -5949,10 +5957,10 @@ void TemplateInstance::trySemantic3(Scope *sc2)
     // extracted to a function to allow windows SEH to work without destructors in the same function
     static int nest;
     //printf("%d\n", nest);
-    if (++nest > 300)
+    if (++nest > global.recursionLimit)
     {
         global.gag = 0;            // ensure error message gets printed
-        error("recursive expansion");
+        error("recursive expansion exceeded allowed nesting limit");
         fatal();
     }
     semantic3(sc2);
@@ -6081,17 +6089,18 @@ Lerror:
         if (minst && minst->isRoot() && !(inst->minst && inst->minst->isRoot()))
         {
             /* Swap the position of 'inst' and 'this' in the instantiation graph.
-             * Then, the primary instance `inst` will be changed to a root instance.
+             * Then, the primary instance `inst` will be changed to a root instance,
+             * along with all members of `inst` having their scopes updated.
              *
              * Before:
-             *  non-root -> A!() -> B!()[inst] -> C!()
+             *  non-root -> A!() -> B!()[inst] -> C!() { members[non-root] }
              *                      |
              *  root     -> D!() -> B!()[this]
              *
              * After:
              *  non-root -> A!() -> B!()[this]
              *                      |
-             *  root     -> D!() -> B!()[inst] -> C!()
+             *  root     -> D!() -> B!()[inst] -> C!() { members[root] }
              */
             Module *mi = minst;
             TemplateInstance *ti = tinst;
@@ -6099,6 +6108,64 @@ Lerror:
             tinst = inst->tinst;
             inst->minst = mi;
             inst->tinst = ti;
+
+            /* https://issues.dlang.org/show_bug.cgi?id=21299
+               `minst` has been updated on the primary instance `inst` so it is
+               now coming from a root module, however all Dsymbol `inst.members`
+               of the instance still have their `_scope.minst` pointing at the
+               original non-root module. We must now propagate `minst` to all
+               members so that forward referenced dependencies that get
+               instantiated will also be appended to the root module, otherwise
+               there will be undefined references at link-time.  */
+            class InstMemberWalker : public Visitor
+            {
+            public:
+                TemplateInstance *inst;
+
+                InstMemberWalker(TemplateInstance *inst)
+                    : inst(inst) { }
+
+                void visit(Dsymbol *d)
+                {
+                    if (d->_scope)
+                        d->_scope->minst = inst->minst;
+                }
+
+                void visit(ScopeDsymbol *sds)
+                {
+                    if (!sds->members)
+                        return;
+                    for (size_t i = 0; i < sds->members->dim; i++)
+                    {
+                        Dsymbol *s = (*sds->members)[i];
+                        s->accept(this);
+                    }
+                    visit((Dsymbol *)sds);
+                }
+
+                void visit(AttribDeclaration *ad)
+                {
+                    Dsymbols *d = ad->include(NULL, NULL);
+                    if (!d)
+                        return;
+                    for (size_t i = 0; i < d->dim; i++)
+                    {
+                        Dsymbol *s = (*d)[i];
+                        s->accept(this);
+                    }
+                    visit((Dsymbol *)ad);
+                }
+
+                void visit(ConditionalDeclaration *cd)
+                {
+                    if (cd->condition->inc)
+                        visit((AttribDeclaration *)cd);
+                    else
+                        visit((Dsymbol *)cd);
+                }
+            };
+            InstMemberWalker v(inst);
+            inst->accept(&v);
 
             if (minst)  // if inst was not speculative
             {
@@ -6353,7 +6420,7 @@ Lerror:
         while (ti && !ti->deferred && ti->tinst)
         {
             ti = ti->tinst;
-            if (++nest > 500)
+            if (++nest > global.recursionLimit)
             {
                 global.gag = 0;            // ensure error message gets printed
                 error("recursive expansion");
@@ -8440,7 +8507,7 @@ void TemplateMixin::semantic(Scope *sc)
 
     static int nest;
     //printf("%d\n", nest);
-    if (++nest > 500)
+    if (++nest > global.recursionLimit)
     {
         global.gag = 0;                 // ensure error message gets printed
         error("recursive expansion");

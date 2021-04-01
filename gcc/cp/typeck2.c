@@ -706,7 +706,31 @@ split_nonconstant_init_1 (tree dest, tree init, bool nested)
 		    sub = build3 (COMPONENT_REF, inner_type, dest, field_index,
 				  NULL_TREE);
 
-		  code = build2 (INIT_EXPR, inner_type, sub, value);
+		  /* We may need to add a copy constructor call if
+		     the field has [[no_unique_address]].  */
+		  if (unsafe_return_slot_p (sub))
+		    {
+		      /* But not if the initializer is an implicit ctor call
+			 we just built in digest_init.  */
+		      if (TREE_CODE (value) == TARGET_EXPR
+			  && TARGET_EXPR_LIST_INIT_P (value))
+			{
+			  tree init = TARGET_EXPR_INITIAL (value);
+			  if (init && TREE_CODE (init) == AGGR_INIT_EXPR
+			      && AGGR_INIT_VIA_CTOR_P (init))
+			    goto build_init;
+			}
+
+		      releasing_vec args = make_tree_vector_single (value);
+		      code = build_special_member_call
+			(sub, complete_ctor_identifier, &args, inner_type,
+			 LOOKUP_NORMAL, tf_warning_or_error);
+		    }
+		  else
+		    {
+		    build_init:
+		      code = build2 (INIT_EXPR, inner_type, sub, value);
+		    }
 		  code = build_stmt (input_location, EXPR_STMT, code);
 		  code = maybe_cleanup_point_expr_void (code);
 		  add_stmt (code);
@@ -871,11 +895,13 @@ store_init_value (tree decl, tree init, vec<tree, va_gc>** cleanups, int flags)
     {
       bool const_init;
       tree oldval = value;
-      value = fold_non_dependent_expr (value, tf_warning_or_error, true, decl);
       if (DECL_DECLARED_CONSTEXPR_P (decl)
 	  || (DECL_IN_AGGR_P (decl)
 	      && DECL_INITIALIZED_IN_CLASS_P (decl)))
 	{
+	  value = fold_non_dependent_expr (value, tf_warning_or_error,
+					   /*manifestly_const_eval=*/true,
+					   decl);
 	  /* Diagnose a non-constant initializer for constexpr variable or
 	     non-inline in-class-initialized static data member.  */
 	  if (!require_constant_expression (value))
@@ -889,7 +915,8 @@ store_init_value (tree decl, tree init, vec<tree, va_gc>** cleanups, int flags)
 	    value = cxx_constant_init (value, decl);
 	}
       else
-	value = maybe_constant_init (value, decl, true);
+	value = fold_non_dependent_init (value, tf_warning_or_error,
+					 /*manifestly_const_eval=*/true, decl);
       if (TREE_CODE (value) == CONSTRUCTOR && cp_has_mutable_p (type))
 	/* Poison this CONSTRUCTOR so it can't be copied to another
 	   constexpr variable.  */
@@ -1488,6 +1515,17 @@ process_init_constructor_array (tree type, tree init, int nested, int flags,
 	= massage_init_elt (TREE_TYPE (type), ce->value, nested, flags,
 			    complain);
 
+      if (TREE_CODE (ce->value) == CONSTRUCTOR
+	  && CONSTRUCTOR_PLACEHOLDER_BOUNDARY (ce->value))
+	{
+	  /* Shift CONSTRUCTOR_PLACEHOLDER_BOUNDARY from the element initializer
+	     up to the array initializer, so that the call to
+	     replace_placeholders from store_init_value can resolve any
+	     PLACEHOLDER_EXPRs inside this element initializer.  */
+	  CONSTRUCTOR_PLACEHOLDER_BOUNDARY (ce->value) = 0;
+	  CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init) = 1;
+	}
+
       gcc_checking_assert
 	(ce->value == error_mark_node
 	 || (same_type_ignoring_top_level_qualifiers_p
@@ -1516,6 +1554,13 @@ process_init_constructor_array (tree type, tree init, int nested, int flags,
 	      /* The default zero-initialization is fine for us; don't
 		 add anything to the CONSTRUCTOR.  */
 	      next = NULL_TREE;
+	    else if (TREE_CODE (next) == CONSTRUCTOR
+		     && CONSTRUCTOR_PLACEHOLDER_BOUNDARY (next))
+	      {
+		/* As above.  */
+		CONSTRUCTOR_PLACEHOLDER_BOUNDARY (next) = 0;
+		CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init) = 1;
+	      }
 	  }
 	else if (!zero_init_p (TREE_TYPE (type)))
 	  next = build_zero_init (TREE_TYPE (type),
@@ -1643,7 +1688,11 @@ process_init_constructor_record (tree type, tree init, int nested, int flags,
 	      ++idx;
 	    }
 	}
-      if (next)
+      if (next == error_mark_node)
+	/* We skip initializers for empty bases/fields, so skipping an invalid
+	   one could make us accept invalid code.  */
+	return PICFLAG_ERRONEOUS;
+      else if (next)
 	/* Already handled above.  */;
       else if (DECL_INITIAL (field))
 	{
@@ -1707,10 +1756,14 @@ process_init_constructor_record (tree type, tree init, int nested, int flags,
 	    warning (OPT_Wmissing_field_initializers,
 		     "missing initializer for member %qD", field);
 
-	  if (!zero_init_p (fldtype)
-	      || skipped < 0)
-	    next = build_zero_init (TREE_TYPE (field), /*nelts=*/NULL_TREE,
-				    /*static_storage_p=*/false);
+	  if (!zero_init_p (fldtype) || skipped < 0)
+	    {
+	      if (TYPE_REF_P (fldtype))
+		next = build_zero_cst (TREE_TYPE (field));
+	      else
+		next = build_zero_init (TREE_TYPE (field), /*nelts=*/NULL_TREE,
+					/*static_storage_p=*/false);
+	    }
 	  else
 	    {
 	      /* The default zero-initialization is fine for us; don't

@@ -436,12 +436,17 @@
 
 (define_insn "mmx_addsubv2sf3"
   [(set (match_operand:V2SF 0 "register_operand" "=y")
-        (vec_merge:V2SF
-          (plus:V2SF
-            (match_operand:V2SF 1 "register_operand" "0")
-            (match_operand:V2SF 2 "nonimmediate_operand" "ym"))
-          (minus:V2SF (match_dup 1) (match_dup 2))
-          (const_int 1)))]
+	(vec_concat:V2SF
+	  (minus:SF
+	    (vec_select:SF
+	      (match_operand:V2SF 1 "register_operand" "0")
+	      (parallel [(const_int  0)]))
+	    (vec_select:SF (match_dup 1) (parallel [(const_int 1)])))
+	  (plus:SF
+            (vec_select:SF
+	      (match_operand:V2SF 2 "nonimmediate_operand" "ym")
+	      (parallel [(const_int  0)]))
+	    (vec_select:SF (match_dup 2) (parallel [(const_int 1)])))))]
   "TARGET_3DNOW_A"
   "pfpnacc\t{%2, %0|%0, %2}"
   [(set_attr "type" "mmxadd")
@@ -1075,9 +1080,9 @@
    (set_attr "mode" "DI,TI,TI")])
 
 (define_expand "<shift_insn><mode>3"
-  [(set (match_operand:MMXMODE248 0 "register_operand")
-        (any_lshift:MMXMODE248
-	  (match_operand:MMXMODE248 1 "register_operand")
+  [(set (match_operand:MMXMODE24 0 "register_operand")
+        (any_lshift:MMXMODE24
+	  (match_operand:MMXMODE24 1 "register_operand")
 	  (match_operand:DI 2 "nonmemory_operand")))]
   "TARGET_MMX_WITH_SSE")
 
@@ -1613,10 +1618,10 @@
    (set_attr "mode" "DI")])
 
 (define_insn_and_split "*vec_dupv4hi"
-  [(set (match_operand:V4HI 0 "register_operand" "=y,Yv,Yw")
+  [(set (match_operand:V4HI 0 "register_operand" "=y,xYw,Yw")
 	(vec_duplicate:V4HI
 	  (truncate:HI
-	    (match_operand:SI 1 "register_operand" "0,Yv,r"))))]
+	    (match_operand:SI 1 "register_operand" "0,xYw,r"))))]
   "(TARGET_MMX || TARGET_MMX_WITH_SSE)
    && (TARGET_SSE || TARGET_3DNOW_A)"
   "@

@@ -24,14 +24,18 @@
 constexpr bool
 test()
 {
-  constexpr std::array<int, 12> ca0{{0, 1, 2, 3, 4, 5,  6, 7, 8,  9, 10, 11}};
+  constexpr std::array<int, 12> ca0{{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}};
   constexpr std::array<int, 3> cam{{4, 5, 6}};
 
   const auto outtt = std::search(ca0.begin(), ca0.end(),
 				 cam.begin(), cam.end(),
 				 std::equal_to<int>());
 
-  return true;
+  const auto outtt2
+    = std::search(ca0.begin(), ca0.end(),
+		  std::default_searcher(cam.begin(), cam.end()));
+
+  return outtt == (ca0.begin() + 4) && outtt2 == outtt;
 }
 
 static_assert(test());

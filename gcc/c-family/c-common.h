@@ -85,7 +85,7 @@ enum rid
   RID_GETTER, RID_SETTER,
   RID_READONLY, RID_READWRITE,
   RID_ASSIGN, RID_RETAIN, RID_COPY,
-  RID_NONATOMIC,
+  RID_PROPATOMIC, RID_NONATOMIC,
 
   /* C (reserved and imaginary types not implemented, so any use is a
      syntax error) */
@@ -1307,7 +1307,7 @@ extern void warn_tautological_cmp (const op_location_t &, enum tree_code,
 				   tree, tree);
 extern void warn_logical_not_parentheses (location_t, enum tree_code, tree,
 					  tree);
-extern bool warn_if_unused_value (const_tree, location_t);
+extern bool warn_if_unused_value (const_tree, location_t, bool = false);
 extern bool strict_aliasing_warning (location_t, tree, tree);
 extern void sizeof_pointer_memaccess_warning (location_t *, tree,
 					      vec<tree, va_gc> *, tree *,

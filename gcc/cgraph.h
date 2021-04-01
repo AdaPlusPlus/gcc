@@ -319,6 +319,9 @@ public:
   /* Return node that alias is aliasing.  */
   inline symtab_node *get_alias_target (void);
 
+  /* Return DECL that alias is aliasing.  */
+  inline tree get_alias_target_tree ();
+
   /* Set section for symbol and its aliases.  */
   void set_section (const char *section);
 
@@ -2165,8 +2168,6 @@ private:
 /* Every top level asm statement is put into a asm_node.  */
 
 struct GTY(()) asm_node {
-
-
   /* Next asm node.  */
   asm_node *next;
   /* String for this asm node.  */
@@ -2718,6 +2719,17 @@ symtab_node::get_alias_target (void)
   return ref->referred;
 }
 
+/* Return the DECL (or identifier) that alias is aliasing.  Unlike the above,
+   this works whether or not the alias has been analyzed already.  */
+
+inline tree
+symtab_node::get_alias_target_tree ()
+{
+  if (alias_target)
+    return alias_target;
+  return get_alias_target ()->decl;
+}
+
 /* Return next reachable static symbol with initializer after the node.  */
 
 inline symtab_node *
@@ -3162,7 +3174,7 @@ cgraph_node::can_remove_if_no_direct_calls_and_refs_p (void)
     return false;
   /* Only COMDAT functions can be removed if externally visible.  */
   if (externally_visible
-      && (!DECL_COMDAT (decl)
+      && ((!DECL_COMDAT (decl) || ifunc_resolver)
 	  || forced_by_abi
 	  || used_from_object_file_p ()))
     return false;

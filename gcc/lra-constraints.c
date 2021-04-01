@@ -244,6 +244,7 @@ in_class_p (rtx reg, enum reg_class cl, enum reg_class *new_class)
 {
   enum reg_class rclass, common_class;
   machine_mode reg_mode;
+  rtx src;
   int class_size, hard_regno, nregs, i, j;
   int regno = REGNO (reg);
 
@@ -259,6 +260,7 @@ in_class_p (rtx reg, enum reg_class cl, enum reg_class *new_class)
     }
   reg_mode = GET_MODE (reg);
   rclass = get_reg_class (regno);
+  src = curr_insn_set != NULL ? SET_SRC (curr_insn_set) : NULL;
   if (regno < new_regno_start
       /* Do not allow the constraints for reload instructions to
 	 influence the classes of new pseudos.  These reloads are
@@ -266,12 +268,10 @@ in_class_p (rtx reg, enum reg_class cl, enum reg_class *new_class)
 	 reload pseudos for one alternative may lead to situations
 	 where other reload pseudos are no longer allocatable.  */
       || (INSN_UID (curr_insn) >= new_insn_uid_start
-	  && curr_insn_set != NULL
-	  && ((OBJECT_P (SET_SRC (curr_insn_set))
-	       && ! CONSTANT_P (SET_SRC (curr_insn_set)))
-	      || (GET_CODE (SET_SRC (curr_insn_set)) == SUBREG
-		  && OBJECT_P (SUBREG_REG (SET_SRC (curr_insn_set)))
-		  && ! CONSTANT_P (SUBREG_REG (SET_SRC (curr_insn_set)))))))
+	  && src != NULL
+	  && ((REG_P (src) || MEM_P (src))
+	      || (GET_CODE (src) == SUBREG
+		  && (REG_P (SUBREG_REG (src)) || MEM_P (SUBREG_REG (src)))))))
     /* When we don't know what class will be used finally for reload
        pseudos, we use ALL_REGS.  */
     return ((regno >= new_regno_start && rclass == ALL_REGS)
@@ -1070,7 +1070,14 @@ match_reload (signed char out, signed char *ins, signed char *outs,
   narrow_reload_pseudo_class (out_rtx, goal_class);
   if (find_reg_note (curr_insn, REG_UNUSED, out_rtx) == NULL_RTX)
     {
+      reg = SUBREG_P (out_rtx) ? SUBREG_REG (out_rtx) : out_rtx;
       start_sequence ();
+      /* If we had strict_low_part, use it also in reload to keep other
+	 parts unchanged but do it only for regs as strict_low_part
+	 has no sense for memory and probably there is no insn pattern
+	 to match the reload insn in memory case.  */
+      if (out >= 0 && curr_static_id->operand[out].strict_low && REG_P (reg))
+	out_rtx = gen_rtx_STRICT_LOW_PART (VOIDmode, out_rtx);
       lra_emit_move (out_rtx, copy_rtx (new_out_reg));
       emit_insn (*after);
       *after = get_insns ();
@@ -3016,8 +3023,13 @@ process_alt_operands (int only_alternative)
 		    && operand_reg[j] != NULL_RTX
 		    && HARD_REGISTER_P (operand_reg[j])
 		    && REG_USERVAR_P (operand_reg[j]))
-		  fatal_insn ("unable to generate reloads for "
-			      "impossible constraints:", curr_insn);
+		  {
+		    /* For asm, let curr_insn_transform diagnose it.  */
+		    if (INSN_CODE (curr_insn) < 0)
+		      return false;
+		    fatal_insn ("unable to generate reloads for "
+				"impossible constraints:", curr_insn);
+		  }
 	      }
 	  if (last_conflict_j < 0)
 	    continue;

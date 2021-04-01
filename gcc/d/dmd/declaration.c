@@ -340,6 +340,13 @@ void AliasDeclaration::semantic(Scope *sc)
 void AliasDeclaration::aliasSemantic(Scope *sc)
 {
     //printf("AliasDeclaration::semantic() %s\n", toChars());
+
+    // as AliasDeclaration::semantic, in case we're called first.
+    // see https://issues.dlang.org/show_bug.cgi?id=21001
+    storage_class |= sc->stc & STCdeprecated;
+    protection = sc->protection;
+    userAttribDecl = sc->userAttribDecl;
+
     // TypeTraits needs to know if it's located in an AliasDeclaration
     sc->flags |= SCOPEalias;
 
@@ -2174,7 +2181,7 @@ Expression *VarDeclaration::callScopeDtor(Scope *)
 
             // Destroying C++ scope classes crashes currently. Since C++ class dtors are not currently supported, simply do not run dtors for them.
             // See https://issues.dlang.org/show_bug.cgi?id=13182
-            if (cd->cpp)
+            if (cd->isCPPclass())
             {
                 break;
             }

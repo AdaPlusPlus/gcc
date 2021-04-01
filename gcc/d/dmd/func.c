@@ -876,7 +876,7 @@ void FuncDeclaration::semantic(Scope *sc)
 
                 /* These quirky conditions mimic what VC++ appears to do
                  */
-                if (global.params.mscoff && cd->cpp &&
+                if (global.params.mscoff && cd->isCPPclass() &&
                     cd->baseClass && cd->baseClass->vtbl.dim)
                 {
                     /* if overriding an interface function, then this is not
@@ -902,7 +902,7 @@ void FuncDeclaration::semantic(Scope *sc)
                 {
                     //printf("\tintroducing function %s\n", toChars());
                     introducing = 1;
-                    if (cd->cpp && Target::reverseCppOverloads)
+                    if (cd->isCPPclass() && Target::reverseCppOverloads)
                     {
                         // with dmc, overloaded functions are grouped and in reverse order
                         vtblIndex = (int)cd->vtbl.dim;
@@ -1212,8 +1212,9 @@ Ldone:
         if (type && mod)
         {
             printedMain = true;
-            const char *name = FileName::searchPath(global.path, mod->srcfile->toChars(), true);
-            message("entry     %-10s\t%s", type, name);
+            const char *name = mod->srcfile->toChars();
+            const char *path = FileName::searchPath(global.path, name, true);
+            message("entry     %-10s\t%s", type, path ? path : name);
         }
     }
 

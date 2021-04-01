@@ -1119,7 +1119,7 @@ grokbitfield (const cp_declarator *declarator,
 	  && !INTEGRAL_OR_UNSCOPED_ENUMERATION_TYPE_P (TREE_TYPE (width)))
 	error ("width of bit-field %qD has non-integral type %qT", value,
 	       TREE_TYPE (width));
-      else
+      else if (!check_for_bare_parameter_packs (width))
 	{
 	  /* Temporarily stash the width in DECL_BIT_FIELD_REPRESENTATIVE.
 	     check_bitfield_decl picks it from there later and sets DECL_SIZE
@@ -1228,7 +1228,7 @@ is_late_template_attribute (tree attr, tree decl)
    the declaration itself is dependent, so all attributes should be applied
    at instantiation time.  */
 
-static tree
+tree
 splice_template_attributes (tree *attr_p, tree decl)
 {
   tree *p = attr_p;
@@ -2526,6 +2526,21 @@ determine_visibility (tree decl)
     }
   else if (DECL_LANG_SPECIFIC (decl) && DECL_USE_TEMPLATE (decl))
     template_decl = decl;
+
+  if (TREE_CODE (decl) == TYPE_DECL
+      && LAMBDA_TYPE_P (TREE_TYPE (decl))
+      && CLASSTYPE_LAMBDA_EXPR (TREE_TYPE (decl)) != error_mark_node)
+    if (tree extra = LAMBDA_TYPE_EXTRA_SCOPE (TREE_TYPE (decl)))
+      {
+	/* The lambda's visibility is limited by that of its extra
+	   scope.  */
+	int vis = 0;
+	if (TYPE_P (extra))
+	  vis = type_visibility (extra);
+	else
+	  vis = expr_visibility (extra);
+	constrain_visibility (decl, vis, false);
+      }
 
   /* If DECL is a member of a class, visibility specifiers on the
      class can influence the visibility of the DECL.  */
@@ -5424,7 +5439,8 @@ cp_warn_deprecated_use_scopes (tree scope)
 	 && scope != error_mark_node
 	 && scope != global_namespace)
     {
-      if (cp_warn_deprecated_use (scope))
+      if ((TREE_CODE (scope) == NAMESPACE_DECL || OVERLOAD_TYPE_P (scope))
+	  && cp_warn_deprecated_use (scope))
 	return;
       if (TYPE_P (scope))
 	scope = CP_TYPE_CONTEXT (scope);
@@ -5498,17 +5514,6 @@ mark_used (tree decl, tsubst_flags_t complain)
     used_types_insert (DECL_CONTEXT (decl));
 
   if (TREE_CODE (decl) == FUNCTION_DECL
-      && DECL_MAYBE_DELETED (decl))
-    {
-      /* ??? Switch other defaulted functions to use DECL_MAYBE_DELETED?  */
-      gcc_assert (special_function_p (decl) == sfk_comparison);
-
-      ++function_depth;
-      synthesize_method (decl);
-      --function_depth;
-    }
-
-  if (TREE_CODE (decl) == FUNCTION_DECL
       && !maybe_instantiate_noexcept (decl, complain))
     return false;
 
@@ -5551,16 +5556,6 @@ mark_used (tree decl, tsubst_flags_t complain)
   if (DECL_ODR_USED (decl))
     return true;
 
-  /* Normally, we can wait until instantiation-time to synthesize DECL.
-     However, if DECL is a static data member initialized with a constant
-     or a constexpr function, we need it right now because a reference to
-     such a data member or a call to such function is not value-dependent.
-     For a function that uses auto in the return type, we need to instantiate
-     it to find out its type.  For OpenMP user defined reductions, we need
-     them instantiated for reduction clauses which inline them by hand
-     directly.  */
-  maybe_instantiate_decl (decl);
-
   if (flag_concepts && TREE_CODE (decl) == FUNCTION_DECL
       && !constraints_satisfied_p (decl))
     {
@@ -5575,6 +5570,16 @@ mark_used (tree decl, tsubst_flags_t complain)
 	}
       return false;
     }
+
+  /* Normally, we can wait until instantiation-time to synthesize DECL.
+     However, if DECL is a static data member initialized with a constant
+     or a constexpr function, we need it right now because a reference to
+     such a data member or a call to such function is not value-dependent.
+     For a function that uses auto in the return type, we need to instantiate
+     it to find out its type.  For OpenMP user defined reductions, we need
+     them instantiated for reduction clauses which inline them by hand
+     directly.  */
+  maybe_instantiate_decl (decl);
 
   if (processing_template_decl || in_template_function ())
     return true;

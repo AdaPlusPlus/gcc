@@ -107,7 +107,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 /* Default to using the NeXT-style runtime, since that's what is
    pre-installed on Darwin systems.  */
 
-#define NEXT_OBJC_RUNTIME 1
+#define NEXT_OBJC_RUNTIME 100508
 
 /* Don't default to pcc-struct-return, because gcc is the only compiler, and
    we want to retain compatibility with older gcc versions.  */
@@ -230,6 +230,7 @@ extern GTY(()) int darwin_ms_struct;
       %{%:sanitize(address): -lasan } \
       %{%:sanitize(undefined): -lubsan } \
       %(link_ssp) \
+      %:version-compare(>< 10.6 10.7 mmacosx-version-min= -ld10-uwfef.o) \
       %(link_gcc_c_sequence) \
     }}}\
     %{!nostdlib:%{!r:%{!nostartfiles:%E}}} %{T*} %{F*} "\
@@ -241,22 +242,32 @@ extern GTY(()) int darwin_ms_struct;
 
 #define DSYMUTIL "\ndsymutil"
 
+/* Spec that controls whether the debug linker is run automatically for
+   a link step.  This needs to be done if there is a source file on the
+   command line which will result in a temporary object (and debug is
+   enabled).  */
+
 #define DSYMUTIL_SPEC \
    "%{!fdump=*:%{!fsyntax-only:%{!c:%{!M:%{!MM:%{!E:%{!S:\
     %{v} \
-    %{gdwarf-2:%{!gstabs*:%{%:debug-level-gt(0): -idsym}}}\
-    %{.c|.cc|.C|.cpp|.cp|.c++|.cxx|.CPP|.m|.mm: \
-    %{gdwarf-2:%{!gstabs*:%{%:debug-level-gt(0): -dsym}}}}}}}}}}}"
+    %{g*:%{!gstabs*:%{%:debug-level-gt(0): -idsym}}}\
+    %{.c|.cc|.C|.cpp|.cp|.c++|.cxx|.CPP|.m|.mm|.s|.f|.f90|\
+      .f95|.f03|.f77|.for|.F|.F90|.F95|.F03: \
+    %{g*:%{!gstabs*:%{%:debug-level-gt(0): -dsym}}}}}}}}}}}"
 
 #define LINK_COMMAND_SPEC LINK_COMMAND_SPEC_A DSYMUTIL_SPEC
 
 /* Tell collect2 to run dsymutil for us as necessary.  */
 #define COLLECT_RUN_DSYMUTIL 1
 
-/* We only want one instance of %G, since libSystem (Darwin's -lc) does not depend
-   on libgcc.  */
+/* Fix PR47558 by linking against libSystem ahead of libgcc. See also
+   PR 80556 and the fallout from this.  */
+
 #undef  LINK_GCC_C_SEQUENCE_SPEC
-#define LINK_GCC_C_SEQUENCE_SPEC "%G %{!nolibc:%L}"
+#define LINK_GCC_C_SEQUENCE_SPEC \
+"%{!static:%{!static-libgcc: \
+    %:version-compare(>= 10.6 mmacosx-version-min= -lSystem) } } \
+  %G %{!nolibc:%L}"
 
 /* ld64 supports a sysroot, it just has a different name and there's no easy
    way to check for it at config time.  */
@@ -472,20 +483,30 @@ extern GTY(()) int darwin_ms_struct;
   %{Zforce_cpusubtype_ALL:-force_cpusubtype_ALL} \
   %{static}" ASM_MMACOSX_VERSION_MIN_SPEC
 
-/* Default ASM_DEBUG_SPEC.  Darwin's as cannot currently produce dwarf
-   debugging data.  */
-
+#ifdef HAVE_AS_STABS_DIRECTIVE
+/* We only pass a debug option to the assembler if that supports stabs, since
+   dwarf is not uniformly supported in the assemblers.  */
 #define ASM_DEBUG_SPEC  "%{g*:%{%:debug-level-gt(0):%{!gdwarf*:--gstabs}}}"
+#else
+#define ASM_DEBUG_SPEC  ""
+#endif
+
+#undef  ASM_DEBUG_OPTION_SPEC
+#define ASM_DEBUG_OPTION_SPEC	""
+
 #define ASM_FINAL_SPEC \
   "%{gsplit-dwarf:%ngsplit-dwarf is not supported on this platform} %<gsplit-dwarf"
 
-/* We still allow output of STABS if the assembler supports it.  */
+/* Since we bootstrap with C++ toolchains realistically require DWARF-2, even
+   if stabs is supported by the assembler.  */
+
+#define PREFERRED_DEBUGGING_TYPE DWARF2_DEBUG
+#define DARWIN_PREFER_DWARF
+#define DWARF2_DEBUGGING_INFO 1
+
 #ifdef HAVE_AS_STABS_DIRECTIVE
 #define DBX_DEBUGGING_INFO 1
-#define PREFERRED_DEBUGGING_TYPE DBX_DEBUG
 #endif
-
-#define DWARF2_DEBUGGING_INFO 1
 
 #define DEBUG_FRAME_SECTION	  "__DWARF,__debug_frame,regular,debug"
 #define DEBUG_INFO_SECTION	  "__DWARF,__debug_info,regular,debug"
@@ -590,6 +611,11 @@ extern GTY(()) int darwin_ms_struct;
 /* Emit a label to separate the exception table.  */
 #define TARGET_ASM_EMIT_EXCEPT_TABLE_LABEL darwin_emit_except_table_label
 
+/* Some of Darwin's unwinders need current frame address state to be reset
+   after a DW_CFA_restore_state recovers the register values.  */
+#undef TARGET_ASM_SHOULD_RESTORE_CFA_STATE
+#define TARGET_ASM_SHOULD_RESTORE_CFA_STATE darwin_should_restore_cfa_state
+
 /* Our profiling scheme doesn't LP labels and counter words.  */
 
 #define NO_PROFILE_COUNTERS	1
@@ -652,6 +678,7 @@ extern GTY(()) int darwin_ms_struct;
    that the name *is* defined in this module, so it doesn't need to
    make them indirect.  */
 
+#undef ASM_DECLARE_FUNCTION_NAME
 #define ASM_DECLARE_FUNCTION_NAME(FILE, NAME, DECL)			\
   do {									\
     const char *xname = NAME;						\
@@ -808,6 +835,12 @@ extern GTY(()) section * darwin_sections[NUM_DARWIN_SECTIONS];
   do {							\
     if (strcmp ("LC", PREFIX) == 0)			\
       sprintf (LABEL, "*%s%ld", "lC", (long)(NUM));	\
+    else if (strcmp ("Lubsan_data", PREFIX) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lubsan_data", (long)(NUM));\
+    else if (strcmp ("Lubsan_type", PREFIX) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lubsan_type", (long)(NUM));\
+    else if (strcmp ("LASAN", PREFIX) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lASAN", (long)(NUM));\
     else						\
       sprintf (LABEL, "*%s%ld", PREFIX, (long)(NUM));	\
   } while (0)
@@ -1049,11 +1082,16 @@ extern void darwin_driver_init (unsigned int *,struct cl_decoded_option **);
 #undef SUPPORTS_INIT_PRIORITY
 #define SUPPORTS_INIT_PRIORITY 0
 
+#undef STACK_CHECK_STATIC_BUILTIN
+#define STACK_CHECK_STATIC_BUILTIN 1
+
 /* When building cross-compilers (and native crosses) we shall default to 
    providing an osx-version-min of this unless overridden by the User.
    10.5 is the only version that fully supports all our archs so that's the
    fall-back default.  */
+#ifndef DEF_MIN_OSX_VERSION
 #define DEF_MIN_OSX_VERSION "10.5"
+#endif
 
 /* Later versions of ld64 support coalescing weak code/data without requiring
    that they be placed in specially identified sections.  This is the earliest

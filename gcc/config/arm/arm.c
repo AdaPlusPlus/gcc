@@ -382,6 +382,7 @@ static const struct attribute_spec arm_attribute_table[] =
     arm_handle_cmse_nonsecure_entry, NULL },
   { "cmse_nonsecure_call", 0, 0, true, false, false, true,
     arm_handle_cmse_nonsecure_call, NULL },
+  { "Advanced SIMD type", 0, 0, false, true, false, true, NULL, NULL },
   { NULL, 0, 0, false, false, false, false, NULL, NULL }
 };
 
@@ -1020,6 +1021,13 @@ int arm_arch_i8mm = 0;
 
 /* Nonzero if chip supports the BFloat16 instructions.  */
 int arm_arch_bf16 = 0;
+
+/* Nonzero if chip supports the Custom Datapath Extension.  */
+int arm_arch_cde = 0;
+int arm_arch_cde_coproc = 0;
+const int arm_arch_cde_coproc_bits[] = {
+  0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80
+};
 
 /* The condition codes of the ARM, and the inverse function.  */
 static const char * const arm_condition_codes[] =
@@ -3399,6 +3407,20 @@ arm_configure_build_target (struct arm_build_target *target,
       bitmap_ior (target->isa, target->isa, fpu_bits);
     }
 
+  /* There may be implied bits which we still need to enable. These are
+     non-named features which are needed to complete other sets of features,
+     but cannot be enabled from arm-cpus.in due to being shared between
+     multiple fgroups. Each entry in all_implied_fbits is of the form
+     ante -> cons, meaning that if the feature "ante" is enabled, we should
+     implicitly enable "cons".  */
+  const struct fbit_implication *impl = all_implied_fbits;
+  while (impl->ante)
+    {
+      if (bitmap_bit_p (target->isa, impl->ante))
+	bitmap_set_bit (target->isa, impl->cons);
+      impl++;
+    }
+
   if (!arm_selected_tune)
     arm_selected_tune = arm_selected_cpu;
   else /* Validate the features passed to -mtune.  */
@@ -3423,8 +3445,9 @@ arm_option_override (void)
 {
   static const enum isa_feature fpu_bitlist_internal[]
     = { ISA_ALL_FPU_INTERNAL, isa_nobit };
+  /* isa_bit_mve_float is also part of FP bit list for arch v8.1-m.main.  */
   static const enum isa_feature fp_bitlist[]
-    = { ISA_ALL_FP, isa_nobit };
+    = { ISA_ALL_FP, isa_bit_mve_float, isa_nobit };
   static const enum isa_feature quirk_bitlist[] = { ISA_ALL_QUIRKS, isa_nobit};
   cl_target_option opts;
 
@@ -3740,6 +3763,21 @@ arm_option_reconfigure_globals (void)
       arm_fp16_format = ARM_FP16_FORMAT_IEEE;
     }
 
+  arm_arch_cde = 0;
+  arm_arch_cde_coproc = 0;
+  int cde_bits[] = {isa_bit_cdecp0, isa_bit_cdecp1, isa_bit_cdecp2,
+		    isa_bit_cdecp3, isa_bit_cdecp4, isa_bit_cdecp5,
+		    isa_bit_cdecp6, isa_bit_cdecp7};
+  for (int i = 0, e = ARRAY_SIZE (cde_bits); i < e; i++)
+    {
+      int cde_bit = bitmap_bit_p (arm_active_target.isa, cde_bits[i]);
+      if (cde_bit)
+	{
+	  arm_arch_cde |= cde_bit;
+	  arm_arch_cde_coproc |= arm_arch_cde_coproc_bits[i];
+	}
+    }
+
   /* And finally, set up some quirks.  */
   arm_arch_no_volatile_ce
     = bitmap_bit_p (arm_active_target.isa, isa_bit_quirk_no_volatile_ce);
@@ -3901,8 +3939,6 @@ static const isr_attribute_arg isr_attribute_args [] =
   { "irq",   ARM_FT_ISR },
   { "FIQ",   ARM_FT_FIQ },
   { "fiq",   ARM_FT_FIQ },
-  { "ABORT", ARM_FT_ISR },
-  { "abort", ARM_FT_ISR },
   { "ABORT", ARM_FT_ISR },
   { "abort", ARM_FT_ISR },
   { "UNDEF", ARM_FT_EXCEPTION },
@@ -5941,6 +5977,8 @@ arm_return_in_memory (const_tree type, const_tree fntype)
 
       /* Find the first field, ignoring non FIELD_DECL things which will
 	 have been created by C++.  */
+      /* NOTE: This code is deprecated and has not been updated to handle
+	 DECL_FIELD_ABI_IGNORED.  */
       for (field = TYPE_FIELDS (type);
 	   field && TREE_CODE (field) != FIELD_DECL;
 	   field = DECL_CHAIN (field))
@@ -6113,13 +6151,42 @@ aapcs_vfp_cum_init (CUMULATIVE_ARGS *pcum  ATTRIBUTE_UNUSED,
   pcum->aapcs_vfp_reg_alloc = 0;
 }
 
+/* Bitmasks that indicate whether earlier versions of GCC would have
+   taken a different path through the ABI logic.  This should result in
+   a -Wpsabi warning if the earlier path led to a different ABI decision.
+
+   WARN_PSABI_EMPTY_CXX17_BASE
+      Indicates that the type includes an artificial empty C++17 base field
+      that, prior to GCC 10.1, would prevent the type from being treated as
+      a HFA or HVA.  See PR94711 for details.
+
+   WARN_PSABI_NO_UNIQUE_ADDRESS
+      Indicates that the type includes an empty [[no_unique_address]] field
+      that, prior to GCC 10.1, would prevent the type from being treated as
+      a HFA or HVA.  */
+const unsigned int WARN_PSABI_EMPTY_CXX17_BASE = 1U << 0;
+const unsigned int WARN_PSABI_NO_UNIQUE_ADDRESS = 1U << 1;
+
 /* Walk down the type tree of TYPE counting consecutive base elements.
    If *MODEP is VOIDmode, then set it to the first valid floating point
    type.  If a non-floating point type is found, or if a floating point
    type that doesn't match a non-VOIDmode *MODEP is found, then return -1,
-   otherwise return the count in the sub-tree.  */
+   otherwise return the count in the sub-tree.
+
+   The WARN_PSABI_FLAGS argument allows the caller to check whether this
+   function has changed its behavior relative to earlier versions of GCC.
+   Normally the argument should be nonnull and point to a zero-initialized
+   variable.  The function then records whether the ABI decision might
+   be affected by a known fix to the ABI logic, setting the associated
+   WARN_PSABI_* bits if so.
+
+   When the argument is instead a null pointer, the function tries to
+   simulate the behavior of GCC before all such ABI fixes were made.
+   This is useful to check whether the function returns something
+   different after the ABI fixes.  */
 static int
-aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep)
+aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep,
+			 unsigned int *warn_psabi_flags)
 {
   machine_mode mode;
   HOST_WIDE_INT size;
@@ -6191,7 +6258,8 @@ aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep)
 	    || TREE_CODE (TYPE_SIZE (type)) != INTEGER_CST)
 	  return -1;
 
-	count = aapcs_vfp_sub_candidate (TREE_TYPE (type), modep);
+	count = aapcs_vfp_sub_candidate (TREE_TYPE (type), modep,
+					 warn_psabi_flags);
 	if (count == -1
 	    || !index
 	    || !TYPE_MAX_VALUE (index)
@@ -6229,7 +6297,30 @@ aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep)
 	    if (TREE_CODE (field) != FIELD_DECL)
 	      continue;
 
-	    sub_count = aapcs_vfp_sub_candidate (TREE_TYPE (field), modep);
+	    if (DECL_FIELD_ABI_IGNORED (field))
+	      {
+		/* See whether this is something that earlier versions of
+		   GCC failed to ignore.  */
+		unsigned int flag;
+		if (lookup_attribute ("no_unique_address",
+				      DECL_ATTRIBUTES (field)))
+		  flag = WARN_PSABI_NO_UNIQUE_ADDRESS;
+		else if (cxx17_empty_base_field_p (field))
+		  flag = WARN_PSABI_EMPTY_CXX17_BASE;
+		else
+		  /* No compatibility problem.  */
+		  continue;
+
+		/* Simulate the old behavior when WARN_PSABI_FLAGS is null.  */
+		if (warn_psabi_flags)
+		  {
+		    *warn_psabi_flags |= flag;
+		    continue;
+		  }
+	      }
+
+	    sub_count = aapcs_vfp_sub_candidate (TREE_TYPE (field), modep,
+						 warn_psabi_flags);
 	    if (sub_count < 0)
 	      return -1;
 	    count += sub_count;
@@ -6262,7 +6353,8 @@ aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep)
 	    if (TREE_CODE (field) != FIELD_DECL)
 	      continue;
 
-	    sub_count = aapcs_vfp_sub_candidate (TREE_TYPE (field), modep);
+	    sub_count = aapcs_vfp_sub_candidate (TREE_TYPE (field), modep,
+						 warn_psabi_flags);
 	    if (sub_count < 0)
 	      return -1;
 	    count = count > sub_count ? count : sub_count;
@@ -6324,10 +6416,39 @@ aapcs_vfp_is_call_or_return_candidate (enum arm_pcs pcs_variant,
      out from the mode.  */
   if (type)
     {
-      int ag_count = aapcs_vfp_sub_candidate (type, &new_mode);
-
+      unsigned int warn_psabi_flags = 0;
+      int ag_count = aapcs_vfp_sub_candidate (type, &new_mode,
+					      &warn_psabi_flags);
       if (ag_count > 0 && ag_count <= 4)
-	*count = ag_count;
+	{
+	  static unsigned last_reported_type_uid;
+	  unsigned uid = TYPE_UID (TYPE_MAIN_VARIANT (type));
+	  int alt;
+	  if (warn_psabi
+	      && warn_psabi_flags
+	      && uid != last_reported_type_uid
+	      && ((alt = aapcs_vfp_sub_candidate (type, &new_mode, NULL))
+		  != ag_count))
+	    {
+	      const char *url
+		= CHANGES_ROOT_URL "gcc-10/changes.html#empty_base";
+	      gcc_assert (alt == -1);
+	      last_reported_type_uid = uid;
+	      /* Use TYPE_MAIN_VARIANT to strip any redundant const
+		 qualification.  */
+	      if (warn_psabi_flags & WARN_PSABI_NO_UNIQUE_ADDRESS)
+		inform (input_location, "parameter passing for argument of "
+			"type %qT with %<[[no_unique_address]]%> members "
+			"changed %{in GCC 10.1%}",
+			TYPE_MAIN_VARIANT (type), url);
+	      else if (warn_psabi_flags & WARN_PSABI_EMPTY_CXX17_BASE)
+		inform (input_location, "parameter passing for argument of "
+			"type %qT when C++17 is enabled changed to match "
+			"C++14 %{in GCC 10.1%}",
+			TYPE_MAIN_VARIANT (type), url);
+	    }
+	  *count = ag_count;
+	}
       else
 	return false;
     }
@@ -6869,7 +6990,20 @@ arm_needs_doubleword_align (machine_mode mode, const_tree type)
 
   int ret = 0;
   int ret2 = 0;
-  /* Record/aggregate types: Use greatest member alignment of any member.  */
+  /* Record/aggregate types: Use greatest member alignment of any member.
+
+     Note that we explicitly consider zero-sized fields here, even though
+     they don't map to AAPCS machine types.  For example, in:
+
+	 struct __attribute__((aligned(8))) empty {};
+
+	 struct s {
+	   [[no_unique_address]] empty e;
+	   int x;
+	 };
+
+     "s" contains only one Fundamental Data Type (the int field)
+     but gains 8-byte alignment and size thanks to "e".  */
   for (tree field = TYPE_FIELDS (type); field; field = DECL_CHAIN (field))
     if (DECL_ALIGN (field) > PARM_BOUNDARY)
       {
@@ -8325,6 +8459,10 @@ thumb2_legitimate_address_p (machine_mode mode, rtx x, int strict_p)
   bool use_ldrd;
   enum rtx_code code = GET_CODE (x);
 
+  if (TARGET_HAVE_MVE
+      && (mode == V8QImode || mode == E_V4QImode || mode == V4HImode))
+    return mve_vector_mem_operand (mode, x, strict_p);
+
   if (arm_address_register_rtx_p (x, strict_p))
     return 1;
 
@@ -9322,6 +9460,9 @@ arm_tls_referenced_p (rtx x)
 static bool
 arm_legitimate_constant_p_1 (machine_mode, rtx x)
 {
+  if (GET_CODE (x) == CONST_VECTOR && !neon_make_constant (x, false))
+    return false;
+
   return flag_pic || !label_mentioned_p (x);
 }
 
@@ -12865,12 +13006,14 @@ neon_pairwise_reduce (rtx op0, rtx op1, machine_mode mode,
     }
 }
 
-/* If VALS is a vector constant that can be loaded into a register
-   using VDUP, generate instructions to do so and return an RTX to
-   assign to the register.  Otherwise return NULL_RTX.  */
+/* Return a non-NULL RTX iff VALS is a vector constant that can be
+   loaded into a register using VDUP.
+
+   If this is the case, and GENERATE is set, we also generate
+   instructions to do this and return an RTX to assign to the register.  */
 
 static rtx
-neon_vdup_constant (rtx vals)
+neon_vdup_constant (rtx vals, bool generate)
 {
   machine_mode mode = GET_MODE (vals);
   machine_mode inner_mode = GET_MODE_INNER (mode);
@@ -12886,6 +13029,9 @@ neon_vdup_constant (rtx vals)
        vdup.i16).  */
     return NULL_RTX;
 
+  if (!generate)
+    return x;
+
   /* We can load this constant by using VDUP and a constant in a
      single ARM register.  This will be cheaper than a vector
      load.  */
@@ -12894,13 +13040,15 @@ neon_vdup_constant (rtx vals)
   return gen_vec_duplicate (mode, x);
 }
 
-/* Generate code to load VALS, which is a PARALLEL containing only
-   constants (for vec_init) or CONST_VECTOR, efficiently into a
-   register.  Returns an RTX to copy into the register, or NULL_RTX
-   for a PARALLEL that cannot be converted into a CONST_VECTOR.  */
+/* Return a non-NULL RTX iff VALS, which is a PARALLEL containing only
+   constants (for vec_init) or CONST_VECTOR, can be effeciently loaded
+   into a register.
+
+   If this is the case, and GENERATE is set, we also generate code to do
+   this and return an RTX to copy into the register.  */
 
 rtx
-neon_make_constant (rtx vals)
+neon_make_constant (rtx vals, bool generate)
 {
   machine_mode mode = GET_MODE (vals);
   rtx target;
@@ -12932,7 +13080,7 @@ neon_make_constant (rtx vals)
       && simd_immediate_valid_for_move (const_vec, mode, NULL, NULL))
     /* Load using VMOV.  On Cortex-A8 this takes one cycle.  */
     return const_vec;
-  else if ((target = neon_vdup_constant (vals)) != NULL_RTX)
+  else if ((target = neon_vdup_constant (vals, generate)) != NULL_RTX)
     /* Loaded using VDUP.  On Cortex-A8 the VDUP takes one NEON
        pipeline cycle; creating the constant takes one or two ARM
        pipeline cycles.  */
@@ -12942,7 +13090,7 @@ neon_make_constant (rtx vals)
        (for either double or quad vectors).  We cannot take advantage
        of single-cycle VLD1 because we need a PC-relative addressing
        mode.  */
-    return const_vec;
+    return arm_disable_literal_pool ? NULL_RTX : const_vec;
   else
     /* A PARALLEL containing something not valid inside CONST_VECTOR.
        We cannot construct an initializer.  */
@@ -13069,13 +13217,14 @@ neon_element_bits (machine_mode mode)
 /* Predicates for `match_operand' and `match_operator'.  */
 
 /* Return TRUE if OP is a valid coprocessor memory address pattern.
-   WB is true if full writeback address modes are allowed and is false
+   WB level is 2 if full writeback address modes are allowed, 1
    if limited writeback address modes (POST_INC and PRE_DEC) are
-   allowed.  */
+   allowed and 0 if no writeback at all is supported.  */
 
 int
-arm_coproc_mem_operand (rtx op, bool wb)
+arm_coproc_mem_operand_wb (rtx op, int wb_level)
 {
+  gcc_assert (wb_level == 0 || wb_level == 1 || wb_level == 2);
   rtx ind;
 
   /* Reject eliminable registers.  */
@@ -13108,16 +13257,18 @@ arm_coproc_mem_operand (rtx op, bool wb)
 
   /* Autoincremment addressing modes.  POST_INC and PRE_DEC are
      acceptable in any case (subject to verification by
-     arm_address_register_rtx_p).  We need WB to be true to accept
+     arm_address_register_rtx_p).  We need full writeback to accept
+     PRE_INC and POST_DEC, and at least restricted writeback for
      PRE_INC and POST_DEC.  */
-  if (GET_CODE (ind) == POST_INC
-      || GET_CODE (ind) == PRE_DEC
-      || (wb
-	  && (GET_CODE (ind) == PRE_INC
-	      || GET_CODE (ind) == POST_DEC)))
+  if (wb_level > 0
+      && (GET_CODE (ind) == POST_INC
+	  || GET_CODE (ind) == PRE_DEC
+	  || (wb_level > 1
+	      && (GET_CODE (ind) == PRE_INC
+		  || GET_CODE (ind) == POST_DEC))))
     return arm_address_register_rtx_p (XEXP (ind, 0), 0);
 
-  if (wb
+  if (wb_level > 1
       && (GET_CODE (ind) == POST_MODIFY || GET_CODE (ind) == PRE_MODIFY)
       && arm_address_register_rtx_p (XEXP (ind, 0), 0)
       && GET_CODE (XEXP (ind, 1)) == PLUS
@@ -13126,16 +13277,119 @@ arm_coproc_mem_operand (rtx op, bool wb)
 
   /* Match:
      (plus (reg)
-	   (const)).  */
+	   (const))
+
+     The encoded immediate for 16-bit modes is multiplied by 2,
+     while the encoded immediate for 32-bit and 64-bit modes is
+     multiplied by 4.  */
+  int factor = MIN (GET_MODE_SIZE (GET_MODE (op)), 4);
   if (GET_CODE (ind) == PLUS
       && REG_P (XEXP (ind, 0))
       && REG_MODE_OK_FOR_BASE_P (XEXP (ind, 0), VOIDmode)
       && CONST_INT_P (XEXP (ind, 1))
-      && INTVAL (XEXP (ind, 1)) > -1024
-      && INTVAL (XEXP (ind, 1)) <  1024
-      && (INTVAL (XEXP (ind, 1)) & 3) == 0)
+      && IN_RANGE (INTVAL (XEXP (ind, 1)), -255 * factor, 255 * factor)
+      && (INTVAL (XEXP (ind, 1)) & (factor - 1)) == 0)
     return TRUE;
 
+  return FALSE;
+}
+
+/* Return TRUE if OP is a valid coprocessor memory address pattern.
+   WB is true if full writeback address modes are allowed and is false
+   if limited writeback address modes (POST_INC and PRE_DEC) are
+   allowed.  */
+
+int arm_coproc_mem_operand (rtx op, bool wb)
+{
+  return arm_coproc_mem_operand_wb (op, wb ? 2 : 1);
+}
+
+/* Return TRUE if OP is a valid coprocessor memory address pattern in a
+   context in which no writeback address modes are allowed.  */
+
+int
+arm_coproc_mem_operand_no_writeback (rtx op)
+{
+  return arm_coproc_mem_operand_wb (op, 0);
+}
+
+/* This function returns TRUE on matching mode and op.
+1. For given modes, check for [Rn], return TRUE for Rn <= LO_REGS.
+2. For other modes, check for [Rn], return TRUE for Rn < R15 (expect R13).  */
+int
+mve_vector_mem_operand (machine_mode mode, rtx op, bool strict)
+{
+  enum rtx_code code;
+  HOST_WIDE_INT val;
+  int  reg_no;
+
+  /* Match: (mem (reg)).  */
+  if (REG_P (op))
+    {
+      int reg_no = REGNO (op);
+      return (((mode == E_V8QImode || mode == E_V4QImode || mode == E_V4HImode)
+	       ? reg_no <= LAST_LO_REGNUM
+	       :(reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM))
+	      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+    }
+  code = GET_CODE (op);
+
+  if (code == POST_INC || code == PRE_DEC
+      || code == PRE_INC || code == POST_DEC)
+    {
+      reg_no = REGNO (XEXP (op, 0));
+      return (((mode == E_V8QImode || mode == E_V4QImode || mode == E_V4HImode)
+	       ? reg_no <= LAST_LO_REGNUM
+	       :(reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM))
+	      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+    }
+  else if ((code == POST_MODIFY || code == PRE_MODIFY)
+	   && GET_CODE (XEXP (op, 1)) == PLUS && REG_P (XEXP (XEXP (op, 1), 1)))
+    {
+      reg_no = REGNO (XEXP (op, 0));
+      val = INTVAL (XEXP ( XEXP (op, 1), 1));
+      switch (mode)
+	{
+	  case E_V16QImode:
+	    if (abs_hwi (val))
+	      return ((reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM)
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  case E_V8HImode:
+	  case E_V8HFmode:
+	    if (abs (val) <= 255)
+	      return ((reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM)
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  case E_V8QImode:
+	  case E_V4QImode:
+	    if (abs_hwi (val))
+	      return (reg_no <= LAST_LO_REGNUM
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  case E_V4HImode:
+	  case E_V4HFmode:
+	    if (val % 2 == 0 && abs (val) <= 254)
+	      return (reg_no <= LAST_LO_REGNUM
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  case E_V4SImode:
+	  case E_V4SFmode:
+	    if (val % 4 == 0 && abs (val) <= 508)
+	      return ((reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM)
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  case E_V2DImode:
+	  case E_V2DFmode:
+	  case E_TImode:
+	    if (val % 4 == 0 && val >= 0 && val <= 1020)
+	      return ((reg_no < LAST_ARM_REGNUM && reg_no != SP_REGNUM)
+		      || (!strict && reg_no >= FIRST_PSEUDO_REGISTER));
+	    return FALSE;
+	  default:
+	    return FALSE;
+	}
+    }
   return FALSE;
 }
 
@@ -13186,7 +13440,9 @@ neon_vector_mem_operand (rtx op, int type, bool strict)
   /* Allow post-increment by register for VLDn */
   if (type == 2 && GET_CODE (ind) == POST_MODIFY
       && GET_CODE (XEXP (ind, 1)) == PLUS
-      && REG_P (XEXP (XEXP (ind, 1), 1)))
+      && REG_P (XEXP (XEXP (ind, 1), 1))
+      && REG_P (XEXP (ind, 0))
+      && rtx_equal_p (XEXP (ind, 0), XEXP (XEXP (ind, 1), 0)))
      return true;
 
   /* Match:
@@ -13205,15 +13461,6 @@ neon_vector_mem_operand (rtx op, int type, bool strict)
 	  < (VALID_NEON_QREG_MODE (GET_MODE (op))? 1016 : 1024))
       && (INTVAL (XEXP (ind, 1)) & 3) == 0)
     return TRUE;
-
-  if (type == 1 && TARGET_HAVE_MVE
-      && (GET_CODE (ind) == POST_INC || GET_CODE (ind) == PRE_DEC))
-    {
-      rtx ind1 = XEXP (ind, 0);
-      if (!REG_P (ind1))
-	return 0;
-      return VFP_REGNO_OK_FOR_SINGLE (REGNO (ind1));
-    }
 
   return FALSE;
 }
@@ -19431,6 +19678,7 @@ output_move_double (rtx *operands, bool emit, int *count)
   if (code0 == REG)
     {
       unsigned int reg0 = REGNO (operands[0]);
+      const bool can_ldrd = TARGET_LDRD && (TARGET_THUMB2 || (reg0 % 2 == 0));
 
       otherops[0] = gen_rtx_REG (SImode, 1 + reg0);
 
@@ -19442,7 +19690,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 
 	  if (emit)
 	    {
-	      if (TARGET_LDRD
+	      if (can_ldrd
 		  && !(fix_cm3_ldrd && reg0 == REGNO(XEXP (operands[1], 0))))
 		output_asm_insn ("ldrd%?\t%0, [%m1]", operands);
 	      else
@@ -19451,7 +19699,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	  break;
 
 	case PRE_INC:
-	  gcc_assert (TARGET_LDRD);
+	  gcc_assert (can_ldrd);
 	  if (emit)
 	    output_asm_insn ("ldrd%?\t%0, [%m1, #8]!", operands);
 	  break;
@@ -19459,7 +19707,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	case PRE_DEC:
 	  if (emit)
 	    {
-	      if (TARGET_LDRD)
+	      if (can_ldrd)
 		output_asm_insn ("ldrd%?\t%0, [%m1, #-8]!", operands);
 	      else
 		output_asm_insn ("ldmdb%?\t%m1!, %M0", operands);
@@ -19469,7 +19717,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	case POST_INC:
 	  if (emit)
 	    {
-	      if (TARGET_LDRD)
+	      if (can_ldrd)
 		output_asm_insn ("ldrd%?\t%0, [%m1], #8", operands);
 	      else
 		output_asm_insn ("ldmia%?\t%m1!, %M0", operands);
@@ -19477,7 +19725,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	  break;
 
 	case POST_DEC:
-	  gcc_assert (TARGET_LDRD);
+	  gcc_assert (can_ldrd);
 	  if (emit)
 	    output_asm_insn ("ldrd%?\t%0, [%m1], #-8", operands);
 	  break;
@@ -19499,6 +19747,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 		  /* Registers overlap so split out the increment.  */
 		  if (emit)
 		    {
+		      gcc_assert (can_ldrd);
 		      output_asm_insn ("add%?\t%1, %1, %2", otherops);
 		      output_asm_insn ("ldrd%?\t%0, [%1] @split", otherops);
 		    }
@@ -19510,10 +19759,11 @@ output_move_double (rtx *operands, bool emit, int *count)
 		  /* Use a single insn if we can.
 		     FIXME: IWMMXT allows offsets larger than ldrd can
 		     handle, fix these up with a pair of ldr.  */
-		  if (TARGET_THUMB2
+		  if (can_ldrd
+		      && (TARGET_THUMB2
 		      || !CONST_INT_P (otherops[2])
 		      || (INTVAL (otherops[2]) > -256
-			  && INTVAL (otherops[2]) < 256))
+			  && INTVAL (otherops[2]) < 256)))
 		    {
 		      if (emit)
 			output_asm_insn ("ldrd%?\t%0, [%1, %2]!", otherops);
@@ -19536,10 +19786,11 @@ output_move_double (rtx *operands, bool emit, int *count)
 	      /* Use a single insn if we can.
 		 FIXME: IWMMXT allows offsets larger than ldrd can handle,
 		 fix these up with a pair of ldr.  */
-	      if (TARGET_THUMB2
+	      if (can_ldrd
+		  && (TARGET_THUMB2
 		  || !CONST_INT_P (otherops[2])
 		  || (INTVAL (otherops[2]) > -256
-		      && INTVAL (otherops[2]) < 256))
+		      && INTVAL (otherops[2]) < 256)))
 		{
 		  if (emit)
 		    output_asm_insn ("ldrd%?\t%0, [%1], %2", otherops);
@@ -19570,7 +19821,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	  operands[1] = otherops[0];
 	  if (emit)
 	    {
-	      if (TARGET_LDRD)
+	      if (can_ldrd)
 		output_asm_insn ("ldrd%?\t%0, [%1]", operands);
 	      else
 		output_asm_insn ("ldmia%?\t%1, %M0", operands);
@@ -19615,7 +19866,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 		    }
 		  otherops[0] = gen_rtx_REG(SImode, REGNO(operands[0]) + 1);
 		  operands[1] = otherops[0];
-		  if (TARGET_LDRD
+		  if (can_ldrd
 		      && (REG_P (otherops[2])
 			  || TARGET_THUMB2
 			  || (CONST_INT_P (otherops[2])
@@ -19676,7 +19927,7 @@ output_move_double (rtx *operands, bool emit, int *count)
 	      if (count)
 		*count = 2;
 
-	      if (TARGET_LDRD)
+	      if (can_ldrd)
 		return "ldrd%?\t%0, [%1]";
 
 	      return "ldmia%?\t%1, %M0";
@@ -20122,51 +20373,43 @@ output_move_neon (rtx *operands)
 	  break;
 	}
       /* Fall through.  */
-    case LABEL_REF:
     case PLUS:
+      if (GET_CODE (addr) == PLUS)
+	addr = XEXP (addr, 0);
+      /* Fall through.  */
+    case LABEL_REF:
       {
 	int i;
 	int overlap = -1;
-	if (TARGET_HAVE_MVE && !BYTES_BIG_ENDIAN
-	    && GET_CODE (addr) != LABEL_REF)
+	for (i = 0; i < nregs; i++)
 	  {
-	    sprintf (buff, "v%srw.32\t%%q0, %%1", load ? "ld" : "st");
-	    ops[0] = reg;
-	    ops[1] = mem;
-	    output_asm_insn (buff, ops);
-	  }
-	else
-	  {
-	    for (i = 0; i < nregs; i++)
+	    /* We're only using DImode here because it's a convenient
+	       size.  */
+	    ops[0] = gen_rtx_REG (DImode, REGNO (reg) + 2 * i);
+	    ops[1] = adjust_address (mem, DImode, 8 * i);
+	    if (reg_overlap_mentioned_p (ops[0], mem))
 	      {
-		/* We're only using DImode here because it's a convenient
-		   size.  */
-		ops[0] = gen_rtx_REG (DImode, REGNO (reg) + 2 * i);
-		ops[1] = adjust_address (mem, DImode, 8 * i);
-		if (reg_overlap_mentioned_p (ops[0], mem))
-		  {
-		    gcc_assert (overlap == -1);
-		    overlap = i;
-		  }
-		else
-		  {
-		    if (TARGET_HAVE_MVE && GET_CODE (addr) == LABEL_REF)
-		      sprintf (buff, "v%sr.64\t%%P0, %%1", load ? "ld" : "st");
-		    else
-		      sprintf (buff, "v%sr%%?\t%%P0, %%1", load ? "ld" : "st");
-		    output_asm_insn (buff, ops);
-		  }
+		gcc_assert (overlap == -1);
+		overlap = i;
 	      }
-	    if (overlap != -1)
+	    else
 	      {
-		ops[0] = gen_rtx_REG (DImode, REGNO (reg) + 2 * overlap);
-		ops[1] = adjust_address (mem, SImode, 8 * overlap);
 		if (TARGET_HAVE_MVE && GET_CODE (addr) == LABEL_REF)
-		  sprintf (buff, "v%sr.32\t%%P0, %%1", load ? "ld" : "st");
+		  sprintf (buff, "v%sr.64\t%%P0, %%1", load ? "ld" : "st");
 		else
 		  sprintf (buff, "v%sr%%?\t%%P0, %%1", load ? "ld" : "st");
 		output_asm_insn (buff, ops);
 	      }
+	  }
+	if (overlap != -1)
+	  {
+	    ops[0] = gen_rtx_REG (DImode, REGNO (reg) + 2 * overlap);
+	    ops[1] = adjust_address (mem, SImode, 8 * overlap);
+	    if (TARGET_HAVE_MVE && GET_CODE (addr) == LABEL_REF)
+	      sprintf (buff, "v%sr.32\t%%P0, %%1", load ? "ld" : "st");
+	    else
+	      sprintf (buff, "v%sr%%?\t%%P0, %%1", load ? "ld" : "st");
+	    output_asm_insn (buff, ops);
 	  }
 
         return "";
@@ -23343,7 +23586,7 @@ arm_print_condition (FILE *stream)
 /* Globally reserved letters: acln
    Puncutation letters currently used: @_|?().!#
    Lower case letters currently used: bcdefhimpqtvwxyz
-   Upper case letters currently used: ABCDFGHJKLMNOPQRSTU
+   Upper case letters currently used: ABCDEFGHIJKLMNOPQRSTU
    Letters previously used, but now deprecated/obsolete: sVWXYZ.
 
    Note that the global reservation for 'c' is only for CONSTANT_ADDRESS_P.
@@ -23909,11 +24152,12 @@ arm_print_operand (FILE *stream, rtx x, int code)
       }
       return;
 
-    /* To print the memory operand with "Us" constraint.  Based on the rtx_code
-       the memory operands output looks like following.
+    /* To print the memory operand with "Ux" or "Uj" constraint.  Based on the
+       rtx_code the memory operands output looks like following.
        1. [Rn], #+/-<imm>
        2. [Rn, #+/-<imm>]!
-       3. [Rn].  */
+       3. [Rn, #+/-<imm>]
+       4. [Rn].  */
     case 'E':
       {
 	rtx addr;
@@ -23947,6 +24191,16 @@ arm_print_operand (FILE *stream, rtx x, int code)
 		else
 		  asm_fprintf (stream, ", #%wd]!",INTVAL (postinc_reg));
 	      }
+	  }
+	else if (code == PLUS)
+	  {
+	    rtx base = XEXP (addr, 0);
+	    rtx index = XEXP (addr, 1);
+
+	    gcc_assert (REG_P (base) && CONST_INT_P (index));
+
+	    HOST_WIDE_INT offset = INTVAL (index);
+	    asm_fprintf (stream, "[%r, #%wd]", REGNO (base), offset);
 	  }
 	else
 	  {
@@ -25000,7 +25254,7 @@ arm_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
 
   if (TARGET_VFP_BASE && IS_VFP_REGNUM (regno))
     {
-      if (mode == DFmode)
+      if (mode == DFmode || mode == DImode)
 	return VFP_REGNO_OK_FOR_DOUBLE (regno);
 
       if (mode == HFmode || mode == BFmode || mode == HImode
@@ -25044,10 +25298,11 @@ arm_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
       if (ARM_NUM_REGS (mode) > 4)
 	return false;
 
-      if (TARGET_THUMB2 && !TARGET_HAVE_MVE)
+      if (TARGET_THUMB2 && !(TARGET_HAVE_MVE || TARGET_CDE))
 	return true;
 
-      return !(TARGET_LDRD && GET_MODE_SIZE (mode) > 4 && (regno & 1) != 0);
+      return !((TARGET_LDRD || TARGET_CDE)
+	       && GET_MODE_SIZE (mode) > 4 && (regno & 1) != 0);
     }
 
   if (regno == FRAME_POINTER_REGNUM
@@ -27875,7 +28130,11 @@ arm_file_start (void)
 	{
 	  const char* truncated_name
 	    = arm_rewrite_selected_cpu (arm_active_target.core_name);
-	  asm_fprintf (asm_out_file, "\t.cpu %s\n", truncated_name);
+	  if (bitmap_bit_p (arm_active_target.isa, isa_bit_quirk_no_asmcpu))
+	    asm_fprintf (asm_out_file, "\t.eabi_attribute 5, \"%s\"\n",
+			 truncated_name);
+	  else
+	    asm_fprintf (asm_out_file, "\t.cpu %s\n", truncated_name);
 	}
 
       if (print_tune_info)
@@ -30336,7 +30595,7 @@ arm_split_atomic_op (enum rtx_code code, rtx old_out, rtx new_out, rtx mem,
     case MINUS:
       if (CONST_INT_P (value))
 	{
-	  value = GEN_INT (-INTVAL (value));
+	  value = gen_int_mode (-INTVAL (value), wmode);
 	  code = PLUS;
 	}
       /* FALLTHRU */
@@ -32702,31 +32961,6 @@ arm_simd_check_vect_par_cnst_half_p (rtx op, machine_mode mode,
   return true;
 }
 
-/* To check op's immediate values matches the mode of the defined insn.  */
-bool
-arm_mve_immediate_check (rtx op, machine_mode mode, bool val)
-{
-  if (val)
-    {
-      if (((GET_CODE (op) == CONST_INT) && (INTVAL (op) <= 7)
-	   && (mode == E_V16QImode))
-	  || ((GET_CODE (op) == CONST_INT) && (INTVAL (op) <= 15)
-	   && (mode == E_V8HImode))
-	  || ((GET_CODE (op) == CONST_INT) && (INTVAL (op) <= 31)
-	   && (mode == E_V4SImode)))
-	return true;
-    }
-  else
-    {
-      if (((GET_CODE (op) == CONST_INT) && (INTVAL (op) <= 7)
-	   && (mode == E_V8HImode))
-	  || ((GET_CODE (op) == CONST_INT) && (INTVAL (op) <= 15)
-	   && (mode == E_V4SImode)))
-	return true;
-    }
-  return false;
-}
-
 /* Can output mi_thunk for all cases except for non-zero vcall_offset
    in Thumb1.  */
 static bool
@@ -33297,6 +33531,18 @@ arm_gen_far_branch (rtx * operands, int pos_label, const char * dest,
   operands[pos_label] = dest_label;
   output_asm_insn (buffer, operands);
   return "";
+}
+
+/* If given mode matches, load from memory to LO_REGS.
+   (i.e [Rn], Rn <= LO_REGS).  */
+enum reg_class
+arm_mode_base_reg_class (machine_mode mode)
+{
+  if (TARGET_HAVE_MVE
+      && (mode == E_V8QImode || mode == E_V4QImode || mode == E_V4HImode))
+    return LO_REGS;
+
+  return MODE_BASE_REG_REG_CLASS (mode);
 }
 
 struct gcc_target targetm = TARGET_INITIALIZER;

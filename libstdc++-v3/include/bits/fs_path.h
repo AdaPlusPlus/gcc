@@ -46,6 +46,10 @@
 #include <bits/shared_ptr.h>
 #include <bits/unique_ptr.h>
 
+#if __cplusplus > 201703L
+# include <compare>
+#endif
+
 #if defined(_WIN32) && !defined(__CYGWIN__)
 # define _GLIBCXX_FILESYSTEM_IS_WINDOWS 1
 # include <algorithm>
@@ -123,32 +127,32 @@ namespace __detail
 		     path>::type;
 
   template<typename _Source>
-    static _Source
+    _Source
     _S_range_begin(_Source __begin) { return __begin; }
 
   struct __null_terminated { };
 
   template<typename _Source>
-    static __null_terminated
+    __null_terminated
     _S_range_end(_Source) { return {}; }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
-    static const _CharT*
+    inline const _CharT*
     _S_range_begin(const basic_string<_CharT, _Traits, _Alloc>& __str)
     { return __str.data(); }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
-    static const _CharT*
+    inline const _CharT*
     _S_range_end(const basic_string<_CharT, _Traits, _Alloc>& __str)
     { return __str.data() + __str.size(); }
 
   template<typename _CharT, typename _Traits>
-    static const _CharT*
+    inline const _CharT*
     _S_range_begin(const basic_string_view<_CharT, _Traits>& __str)
     { return __str.data(); }
 
   template<typename _CharT, typename _Traits>
-    static const _CharT*
+    inline const _CharT*
     _S_range_end(const basic_string_view<_CharT, _Traits>& __str)
     { return __str.data() + __str.size(); }
 
@@ -452,6 +456,20 @@ namespace __detail
     // non-member operators
 
     /// Compare paths
+    friend bool operator==(const path& __lhs, const path& __rhs) noexcept
+    { return __lhs.compare(__rhs) == 0; }
+
+#if __cpp_lib_three_way_comparison
+    /// Compare paths
+    friend strong_ordering
+    operator<=>(const path& __lhs, const path& __rhs) noexcept
+    { return __lhs.compare(__rhs) <=> 0; }
+#else
+    /// Compare paths
+    friend bool operator!=(const path& __lhs, const path& __rhs) noexcept
+    { return !(__lhs == __rhs); }
+
+    /// Compare paths
     friend bool operator<(const path& __lhs, const path& __rhs) noexcept
     { return __lhs.compare(__rhs) < 0; }
 
@@ -466,14 +484,7 @@ namespace __detail
     /// Compare paths
     friend bool operator>=(const path& __lhs, const path& __rhs) noexcept
     { return !(__lhs < __rhs); }
-
-    /// Compare paths
-    friend bool operator==(const path& __lhs, const path& __rhs) noexcept
-    { return __lhs.compare(__rhs) == 0; }
-
-    /// Compare paths
-    friend bool operator!=(const path& __lhs, const path& __rhs) noexcept
-    { return !(__lhs == __rhs); }
+#endif
 
     /// Append one path to another
     friend path operator/(const path& __lhs, const path& __rhs)
@@ -603,7 +614,7 @@ namespace __detail
       ~_List() = default;
 
       _Type type() const noexcept
-      { return _Type{reinterpret_cast<uintptr_t>(_M_impl.get()) & 0x3}; }
+      { return _Type(reinterpret_cast<uintptr_t>(_M_impl.get()) & 0x3); }
 
       void type(_Type) noexcept;
 
@@ -617,10 +628,10 @@ namespace __detail
       // All the member functions below here have a precondition !empty()
       // (and they should only be called from within the library).
 
-      iterator begin();
-      iterator end();
-      const_iterator begin() const;
-      const_iterator end() const;
+      iterator begin() noexcept;
+      iterator end() noexcept;
+      const_iterator begin() const noexcept;
+      const_iterator end() const noexcept;
 
       value_type& front() noexcept;
       value_type& back() noexcept;

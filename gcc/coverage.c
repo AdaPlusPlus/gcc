@@ -49,6 +49,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "intl.h"
 #include "auto-profile.h"
 #include "profile.h"
+#include "diagnostic.h"
 
 #include "gcov-io.c"
 
@@ -1199,6 +1200,13 @@ coverage_obj_finish (vec<constructor_elt, va_gc> *ctor)
 void
 coverage_init (const char *filename)
 {
+  const char *original_filename = filename;
+  int original_len = strlen (original_filename);
+#if HAVE_DOS_BASED_FILE_SYSTEM
+  const char *separator = "\\";
+#else
+  const char *separator = "/";
+#endif
   int len = strlen (filename);
   int prefix_len = 0;
 
@@ -1215,12 +1223,20 @@ coverage_init (const char *filename)
 	 of filename in order to prevent file path clashing.  */
       if (profile_data_prefix)
 	{
-#if HAVE_DOS_BASED_FILE_SYSTEM
-	  const char *separator = "\\";
-#else
-	  const char *separator = "/";
-#endif
 	  filename = concat (getpwd (), separator, filename, NULL);
+	  if (profile_prefix_path)
+	    {
+	      if (!strncmp (filename, profile_prefix_path,
+			    strlen (profile_prefix_path)))
+		{
+		  filename += strlen (profile_prefix_path);
+		  while (*filename == *separator)
+		    filename++;
+		}
+	      else
+		warning (0, "filename %qs does not start with profile "
+			 "prefix %qs", filename, profile_prefix_path);
+	    }
 	  filename = mangle_path (filename);
 	  len = strlen (filename);
 	}
@@ -1238,7 +1254,7 @@ coverage_init (const char *filename)
   if (profile_data_prefix)
     {
       memcpy (da_file_name, profile_data_prefix, prefix_len);
-      da_file_name[prefix_len++] = '/';
+      da_file_name[prefix_len++] = *separator;
     }
   memcpy (da_file_name + prefix_len, filename, len);
   strcpy (da_file_name + prefix_len + len, GCOV_DATA_SUFFIX);
@@ -1257,9 +1273,9 @@ coverage_init (const char *filename)
 	bbg_file_name = xstrdup (profile_note_location);
       else
 	{
-	  bbg_file_name = XNEWVEC (char, len + strlen (GCOV_NOTE_SUFFIX) + 1);
-	  memcpy (bbg_file_name, filename, len);
-	  strcpy (bbg_file_name + len, GCOV_NOTE_SUFFIX);
+	  bbg_file_name = XNEWVEC (char, original_len + strlen (GCOV_NOTE_SUFFIX) + 1);
+	  memcpy (bbg_file_name, original_filename, original_len);
+	  strcpy (bbg_file_name + original_len, GCOV_NOTE_SUFFIX);
 	}
 
       if (!gcov_open (bbg_file_name, -1))

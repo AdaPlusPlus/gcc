@@ -2204,29 +2204,29 @@ build_real_from_int_cst (tree type, const_tree i)
   return v;
 }
 
-/* Return a newly constructed STRING_CST node whose value is
-   the LEN characters at STR.
+/* Return a newly constructed STRING_CST node whose value is the LEN
+   characters at STR when STR is nonnull, or all zeros otherwise.
    Note that for a C string literal, LEN should include the trailing NUL.
    The TREE_TYPE is not initialized.  */
 
 tree
-build_string (int len, const char *str)
+build_string (unsigned len, const char *str /*= NULL */)
 {
-  tree s;
-  size_t length;
-
   /* Do not waste bytes provided by padding of struct tree_string.  */
-  length = len + offsetof (struct tree_string, str) + 1;
+  unsigned size = len + offsetof (struct tree_string, str) + 1;
 
-  record_node_allocation_statistics (STRING_CST, length);
+  record_node_allocation_statistics (STRING_CST, size);
 
-  s = (tree) ggc_internal_alloc (length);
+  tree s = (tree) ggc_internal_alloc (size);
 
   memset (s, 0, sizeof (struct tree_typed));
   TREE_SET_CODE (s, STRING_CST);
   TREE_CONSTANT (s) = 1;
   TREE_STRING_LENGTH (s) = len;
-  memcpy (s->string.str, str, len);
+  if (str)
+    memcpy (s->string.str, str, len);
+  else
+    memset (s->string.str, 0, len);
   s->string.str[len] = '\0';
 
   return s;
@@ -5148,31 +5148,21 @@ protected_set_expr_location (tree t, location_t loc)
     SET_EXPR_LOCATION (t, loc);
   else if (t && TREE_CODE (t) == STATEMENT_LIST)
     {
-      /* With -gstatement-frontiers we could have a STATEMENT_LIST with
-	 DEBUG_BEGIN_STMT(s) and only a single other stmt, which with
-	 -g wouldn't be present and we'd have that single other stmt
-	 directly instead.  */
-      struct tree_statement_list_node *n = STATEMENT_LIST_HEAD (t);
-      if (!n)
-	return;
-      while (TREE_CODE (n->stmt) == DEBUG_BEGIN_STMT)
-	{
-	  n = n->next;
-	  if (!n)
-	    return;
-	}
-      tree t2 = n->stmt;
-      do
-	{
-	  n = n->next;
-	  if (!n)
-	    {
-	      protected_set_expr_location (t2, loc);
-	      return;
-	    }
-	}
-      while (TREE_CODE (n->stmt) == DEBUG_BEGIN_STMT);
+      t = expr_single (t);
+      if (t && CAN_HAVE_LOCATION_P (t))
+	SET_EXPR_LOCATION (t, loc);
     }
+}
+
+/* Like PROTECTED_SET_EXPR_LOCATION, but only do that if T has
+   UNKNOWN_LOCATION.  */
+
+void
+protected_set_expr_location_if_unset (tree t, location_t loc)
+{
+  t = expr_single (t);
+  if (t && !EXPR_HAS_LOCATION (t))
+    protected_set_expr_location (t, loc);
 }
 
 /* Data used when collecting DECLs and TYPEs for language data removal.  */
@@ -5616,15 +5606,14 @@ free_lang_data_in_type (tree type, class free_lang_data_d *fld)
 	  /* Type values are used only for C++ ODR checking.  Drop them
 	     for all type variants and non-ODR types.
 	     For ODR types the data is freed in free_odr_warning_data.  */
-	  if (TYPE_MAIN_VARIANT (type) != type
-	      || !type_with_linkage_p (type))
+	  if (!TYPE_VALUES (type))
+	    ;
+	  else if (TYPE_MAIN_VARIANT (type) != type
+		   || !type_with_linkage_p (type)
+		   || type_in_anonymous_namespace_p (type))
 	    TYPE_VALUES (type) = NULL;
 	  else
-	  /* Simplify representation by recording only values rather
-	     than const decls.  */
-	    for (tree e = TYPE_VALUES (type); e; e = TREE_CHAIN (e))
-	      if (TREE_CODE (TREE_VALUE (e)) == CONST_DECL)
-		TREE_VALUE (e) = DECL_INITIAL (TREE_VALUE (e));
+	    register_odr_enum (type);
 	}
       free_lang_data_in_one_sizepos (&TYPE_MIN_VALUE (type));
       free_lang_data_in_one_sizepos (&TYPE_MAX_VALUE (type));
@@ -8891,18 +8880,22 @@ get_narrower (tree op, int *unsignedp_ptr)
 
   if (TREE_CODE (op) == COMPOUND_EXPR)
     {
-      while (TREE_CODE (op) == COMPOUND_EXPR)
+      do
 	op = TREE_OPERAND (op, 1);
+      while (TREE_CODE (op) == COMPOUND_EXPR);
       tree ret = get_narrower (op, unsignedp_ptr);
       if (ret == op)
 	return win;
-      op = win;
-      for (tree *p = &win; TREE_CODE (op) == COMPOUND_EXPR;
-	   op = TREE_OPERAND (op, 1), p = &TREE_OPERAND (*p, 1))
-	*p = build2_loc (EXPR_LOCATION (op), COMPOUND_EXPR,
-			 TREE_TYPE (ret), TREE_OPERAND (op, 0),
-			 ret);
-      return win;
+      auto_vec <tree, 16> v;
+      unsigned int i;
+      for (op = win; TREE_CODE (op) == COMPOUND_EXPR;
+	   op = TREE_OPERAND (op, 1))
+	v.safe_push (op);
+      FOR_EACH_VEC_ELT_REVERSE (v, i, op)
+	ret = build2_loc (EXPR_LOCATION (op), COMPOUND_EXPR,
+			  TREE_TYPE (ret), TREE_OPERAND (op, 0),
+			  ret);
+      return ret;
     }
   while (TREE_CODE (op) == NOP_EXPR)
     {
@@ -11529,6 +11522,7 @@ build_call_expr_internal_loc_array (location_t loc, internal_fn ifn,
     CALL_EXPR_ARG (t, i) = args[i];
   SET_EXPR_LOCATION (t, loc);
   CALL_EXPR_IFN (t) = ifn;
+  process_call_operands (t);
   return t;
 }
 
@@ -11619,12 +11613,12 @@ build_alloca_call_expr (tree size, unsigned int align, HOST_WIDE_INT max_size)
 
 /* Create a new constant string literal of type ELTYPE[SIZE] (or LEN
    if SIZE == -1) and return a tree node representing char* pointer to
-   it as an ADDR_EXPR (ARRAY_REF (ELTYPE, ...)).  The STRING_CST value
-   is the LEN bytes at STR (the representation of the string, which may
-   be wide).  */
+   it as an ADDR_EXPR (ARRAY_REF (ELTYPE, ...)).  When STR is nonnull
+   the STRING_CST value is the LEN bytes at STR (the representation
+   of the string, which may be wide).  Otherwise it's all zeros.  */
 
 tree
-build_string_literal (int len, const char *str,
+build_string_literal (unsigned len, const char *str /* = NULL */,
 		      tree eltype /* = char_type_node */,
 		      unsigned HOST_WIDE_INT size /* = -1 */)
 {
@@ -12038,7 +12032,6 @@ walk_tree_1 (tree *tp, walk_tree_fn func, void *data,
     case INTEGER_CST:
     case REAL_CST:
     case FIXED_CST:
-    case VECTOR_CST:
     case STRING_CST:
     case BLOCK:
     case PLACEHOLDER_EXPR:
@@ -12067,6 +12060,18 @@ walk_tree_1 (tree *tp, walk_tree_fn func, void *data,
 
 	/* Now walk the first one as a tail call.  */
 	WALK_SUBTREE_TAIL (TREE_VEC_ELT (*tp, 0));
+      }
+
+    case VECTOR_CST:
+      {
+	unsigned len = vector_cst_encoded_nelts (*tp);
+	if (len == 0)
+	  break;
+	/* Walk all elements but the first.  */
+	while (--len)
+	  WALK_SUBTREE (VECTOR_CST_ENCODED_ELT (*tp, len));
+	/* Now walk the first one as a tail call.  */
+	WALK_SUBTREE_TAIL (VECTOR_CST_ENCODED_ELT (*tp, 0));
       }
 
     case COMPLEX_CST:
@@ -12853,10 +12858,11 @@ lhd_gcc_personality (void)
    OBJ_TYPE_REF representing an virtual call of C++ method.
    (As opposed to OBJ_TYPE_REF representing objc calls
    through a cast where middle-end devirtualization machinery
-   can't apply.) */
+   can't apply.)  FOR_DUMP_P is true when being called from
+   the dump routines.  */
 
 bool
-virtual_method_call_p (const_tree target)
+virtual_method_call_p (const_tree target, bool for_dump_p)
 {
   if (TREE_CODE (target) != OBJ_TYPE_REF)
     return false;
@@ -12869,7 +12875,7 @@ virtual_method_call_p (const_tree target)
   /* If we do not have BINFO associated, it means that type was built
      without devirtualization enabled.  Do not consider this a virtual
      call.  */
-  if (!TYPE_BINFO (obj_type_ref_class (target)))
+  if (!TYPE_BINFO (obj_type_ref_class (target, for_dump_p)))
     return false;
   return true;
 }
@@ -13426,7 +13432,9 @@ array_ref_low_bound (tree exp)
     return SUBSTITUTE_PLACEHOLDER_IN_EXPR (TYPE_MIN_VALUE (domain_type), exp);
 
   /* Otherwise, return a zero of the appropriate type.  */
-  return build_int_cst (TREE_TYPE (TREE_OPERAND (exp, 1)), 0);
+  tree idxtype = TREE_TYPE (TREE_OPERAND (exp, 1));
+  return (idxtype == error_mark_node
+	  ? integer_zero_node : build_int_cst (idxtype, 0));
 }
 
 /* Return a tree representing the upper bound of the array mentioned in
@@ -13648,6 +13656,10 @@ component_ref_size (tree ref, bool *interior_zero_length /* = NULL */)
   if (!interior_zero_length)
     interior_zero_length = &int_0_len;
 
+  /* The object/argument referenced by the COMPONENT_REF and its type.  */
+  tree arg = TREE_OPERAND (ref, 0);
+  tree argtype = TREE_TYPE (arg);
+  /* The referenced member.  */
   tree member = TREE_OPERAND (ref, 1);
 
   tree memsize = DECL_SIZE_UNIT (member);
@@ -13659,7 +13671,7 @@ component_ref_size (tree ref, bool *interior_zero_length /* = NULL */)
 
       bool trailing = array_at_struct_end_p (ref);
       bool zero_length = integer_zerop (memsize);
-      if (!trailing && (!interior_zero_length || !zero_length))
+      if (!trailing && !zero_length)
 	/* MEMBER is either an interior array or is an array with
 	   more than one element.  */
 	return memsize;
@@ -13678,9 +13690,14 @@ component_ref_size (tree ref, bool *interior_zero_length /* = NULL */)
 		  offset_int minidx = wi::to_offset (min);
 		  offset_int maxidx = wi::to_offset (max);
 		  if (maxidx - minidx > 0)
-		    /* MEMBER is an array with more than 1 element.  */
+		    /* MEMBER is an array with more than one element.  */
 		    return memsize;
 		}
+
+      /* For a refernce to a zero- or one-element array member of a union
+	 use the size of the union instead of the size of the member.  */
+      if (TREE_CODE (argtype) == UNION_TYPE)
+	memsize = TYPE_SIZE_UNIT (argtype);
     }
 
   /* MEMBER is either a bona fide flexible array member, or a zero-length
@@ -13695,28 +13712,27 @@ component_ref_size (tree ref, bool *interior_zero_length /* = NULL */)
       if (!*interior_zero_length)
 	return NULL_TREE;
 
-      if (TREE_CODE (TREE_OPERAND (ref, 0)) != COMPONENT_REF)
+      if (TREE_CODE (arg) != COMPONENT_REF)
 	return NULL_TREE;
 
-      base = TREE_OPERAND (ref, 0);
+      base = arg;
       while (TREE_CODE (base) == COMPONENT_REF)
 	base = TREE_OPERAND (base, 0);
       baseoff = tree_to_poly_int64 (byte_position (TREE_OPERAND (ref, 1)));
     }
 
   /* BASE is the declared object of which MEMBER is either a member
-     or that is cast to REFTYPE (e.g., a char buffer used to store
-     a REFTYPE object).  */
-  tree reftype = TREE_TYPE (TREE_OPERAND (ref, 0));
+     or that is cast to ARGTYPE (e.g., a char buffer used to store
+     an ARGTYPE object).  */
   tree basetype = TREE_TYPE (base);
 
   /* Determine the base type of the referenced object.  If it's
-     the same as REFTYPE and MEMBER has a known size, return it.  */
+     the same as ARGTYPE and MEMBER has a known size, return it.  */
   tree bt = basetype;
   if (!*interior_zero_length)
     while (TREE_CODE (bt) == ARRAY_TYPE)
       bt = TREE_TYPE (bt);
-  bool typematch = useless_type_conversion_p (reftype, bt);
+  bool typematch = useless_type_conversion_p (argtype, bt);
   if (memsize && typematch)
     return memsize;
 
@@ -13726,24 +13742,25 @@ component_ref_size (tree ref, bool *interior_zero_length /* = NULL */)
     /* MEMBER is a true flexible array member.  Compute its size from
        the initializer of the BASE object if it has one.  */
     if (tree init = DECL_P (base) ? DECL_INITIAL (base) : NULL_TREE)
-      {
-	init = get_initializer_for (init, member);
-	if (init)
-	  {
-	    memsize = TYPE_SIZE_UNIT (TREE_TYPE (init));
-	    if (tree refsize = TYPE_SIZE_UNIT (reftype))
-	      {
-		/* Use the larger of the initializer size and the tail
-		   padding in the enclosing struct.  */
-		poly_int64 rsz = tree_to_poly_int64 (refsize);
-		rsz -= baseoff;
-		if (known_lt (tree_to_poly_int64 (memsize), rsz))
-		  memsize = wide_int_to_tree (TREE_TYPE (memsize), rsz);
-	      }
+      if (init != error_mark_node)
+	{
+	  init = get_initializer_for (init, member);
+	  if (init)
+	    {
+	      memsize = TYPE_SIZE_UNIT (TREE_TYPE (init));
+	      if (tree refsize = TYPE_SIZE_UNIT (argtype))
+		{
+		  /* Use the larger of the initializer size and the tail
+		     padding in the enclosing struct.  */
+		  poly_int64 rsz = tree_to_poly_int64 (refsize);
+		  rsz -= baseoff;
+		  if (known_lt (tree_to_poly_int64 (memsize), rsz))
+		    memsize = wide_int_to_tree (TREE_TYPE (memsize), rsz);
+		}
 
-	    baseoff = 0;
-	  }
-      }
+	      baseoff = 0;
+	    }
+	}
 
   if (!memsize)
     {

@@ -37,7 +37,6 @@
 bool typeMerge(Scope *sc, TOK op, Type **pt, Expression **pe1, Expression **pe2);
 bool isArrayOpValid(Expression *e);
 Expression *expandVar(int result, VarDeclaration *v);
-TypeTuple *toArgTypes(Type *t);
 bool checkAssignEscape(Scope *sc, Expression *e, bool gag);
 bool checkParamArgumentEscape(Scope *sc, FuncDeclaration *fdc, Identifier *par, Expression *arg, bool gag);
 bool checkAccess(AggregateDeclaration *ad, Loc loc, Scope *sc, Dsymbol *smember);
@@ -813,6 +812,16 @@ public:
         exp->type->resolve(exp->loc, sc, &e, &t, &s, true);
         if (e)
         {
+            // `(Type)` is actually `(var)` so if `(var)` is a member requiring `this`
+            // then rewrite as `(this.var)` in case it would be followed by a DotVar
+            // to fix https://issues.dlang.org/show_bug.cgi?id=9490
+            VarExp *ve = (e->op == TOKvar) ? (VarExp *)e : NULL;
+            if (ve && ve->var && exp->parens && !ve->var->isStatic() && !(sc->stc & STCstatic) &&
+                sc->func && sc->func->needThis() && ve->var->toParent2()->isAggregateDeclaration())
+            {
+                // printf("apply fix for issue 9490: add `this.` to `%s`...\n", e->toChars());
+                e = new DotVarExp(exp->loc, new ThisExp(exp->loc), ve->var, false);
+            }
             //printf("e = %s %s\n", Token::toChars(e->op), e->toChars());
             e = semantic(e, sc);
         }
@@ -2074,7 +2083,7 @@ public:
                      * The results of this are highly platform dependent, and intended
                      * primarly for use in implementing va_arg().
                      */
-                    tded = toArgTypes(e->targ);
+                    tded = Target::toArgTypes(e->targ);
                     if (!tded)
                         goto Lno;           // not valid for a parameter
                     break;
@@ -2891,7 +2900,7 @@ public:
             else
             {
                 static int nest;
-                if (++nest > 500)
+                if (++nest > global.recursionLimit)
                 {
                     exp->error("recursive evaluation of %s", exp->toChars());
                     --nest;
@@ -6888,6 +6897,7 @@ public:
         if (Expression *ex = binSemanticProp(exp, sc))
         {
             result = ex;
+            return;
         }
         Expression *e = exp->op_overload(sc);
         if (e)

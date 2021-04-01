@@ -199,7 +199,7 @@
     case 8:
       return "vmov%?.f32\t%0, %1\t%@ int";
     case 9:
-      return "vmsr%?\tP0, %1\t%@ movhi";
+      return "vmsr%?\t P0, %1\t%@ movhi";
     case 10:
       return "vmrs%?\t%0, P0\t%@ movhi";
     default:
@@ -391,11 +391,11 @@
 
 (define_insn "*mov<mode>_vfp_<mode>16"
   [(set (match_operand:HFBF 0 "nonimmediate_operand"
-			  "= ?r,?m,t,r,t,r,t, t, Um,r")
+			  "= ?r,?m,t,r,t,r,t, t, Uj,r")
 	(match_operand:HFBF 1 "general_operand"
-			  "  m,r,t,r,r,t,Dv,Um,t, F"))]
+			  "  m,r,t,r,r,t,Dv,Uj,t, F"))]
   "TARGET_32BIT
-   && TARGET_VFP_FP16INST
+   && (TARGET_VFP_FP16INST || TARGET_HAVE_MVE)
    && (s_register_operand (operands[0], <MODE>mode)
        || s_register_operand (operands[1], <MODE>mode))"
  {
@@ -415,12 +415,12 @@
       return \"vmov.f16\\t%0, %1\t%@ __<fporbf>\";
     case 7: /* S register from memory.  */
       if (TARGET_HAVE_MVE)
-	return \"vldr.16\\t%0, %A1\";
+	return \"vldr.16\\t%0, %1\";
       else
 	return \"vld1.16\\t{%z0}, %A1\";
     case 8: /* Memory from S register.  */
       if (TARGET_HAVE_MVE)
-	return \"vstr.16\\t%1, %A0\";
+	return \"vstr.16\\t%1, %0\";
       else
 	return \"vst1.16\\t{%z1}, %A0\";
     case 9: /* ARM register from constant.  */
@@ -2125,7 +2125,7 @@
 	(match_operand:DF 1 "const_double_operand" "F"))
    (clobber (match_operand:DF 2 "s_register_operand" "=r"))]
   "arm_disable_literal_pool
-   && TARGET_HARD_FLOAT
+   && TARGET_VFP_BASE
    && !arm_const_double_rtx (operands[1])
    && !(TARGET_VFP_DOUBLE && vfp3_const_double_rtx (operands[1]))"
   "#"
@@ -2151,7 +2151,7 @@
 	(match_operand:SF 1 "const_double_operand" "E"))
    (clobber (match_operand:SF 2 "s_register_operand" "=r"))]
   "arm_disable_literal_pool
-   && TARGET_HARD_FLOAT
+   && TARGET_VFP_BASE
    && !vfp3_const_double_rtx (operands[1])"
   "#"
   ""
@@ -2164,4 +2164,75 @@
   emit_move_insn (operands[0], operands[2]);
   DONE;
 }
+)
+
+;; CDE instructions using FPU/MVE S/D registers
+
+(define_insn "arm_vcx1<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SI 2 "const_int_vcde1_operand" "i")]
+	 UNSPEC_VCDE))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx1\\tp%c1, %<V_reg>0, #%c2"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_vcx1a<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SIDI 2 "register_operand" "0")
+		      (match_operand:SI 3 "const_int_vcde1_operand" "i")]
+	 UNSPEC_VCDEA))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx1a\\tp%c1, %<V_reg>0, #%c3"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_vcx2<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SIDI 2 "register_operand" "t")
+		      (match_operand:SI 3 "const_int_vcde2_operand" "i")]
+	 UNSPEC_VCDE))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx2\\tp%c1, %<V_reg>0, %<V_reg>2, #%c3"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_vcx2a<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SIDI 2 "register_operand" "0")
+		      (match_operand:SIDI 3 "register_operand" "t")
+		      (match_operand:SI 4 "const_int_vcde2_operand" "i")]
+	 UNSPEC_VCDEA))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx2a\\tp%c1, %<V_reg>0, %<V_reg>3, #%c4"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_vcx3<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SIDI 2 "register_operand" "t")
+		      (match_operand:SIDI 3 "register_operand" "t")
+		      (match_operand:SI 4 "const_int_vcde3_operand" "i")]
+	 UNSPEC_VCDE))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx3\\tp%c1, %<V_reg>0, %<V_reg>2, %<V_reg>3, #%c4"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_vcx3a<mode>"
+  [(set (match_operand:SIDI 0 "register_operand" "=t")
+	(unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		      (match_operand:SIDI 2 "register_operand" "0")
+		      (match_operand:SIDI 3 "register_operand" "t")
+		      (match_operand:SIDI 4 "register_operand" "t")
+		      (match_operand:SI 5 "const_int_vcde3_operand" "i")]
+	 UNSPEC_VCDEA))]
+  "TARGET_CDE && (TARGET_ARM_FP || TARGET_HAVE_MVE)"
+  "vcx3a\\tp%c1, %<V_reg>0, %<V_reg>3, %<V_reg>4, #%c5"
+  [(set_attr "type" "coproc")]
 )

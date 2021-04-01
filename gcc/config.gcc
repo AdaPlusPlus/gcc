@@ -346,7 +346,7 @@ arc*-*-*)
 arm*-*-*)
 	cpu_type=arm
 	extra_objs="arm-builtins.o aarch-common.o"
-	extra_headers="mmintrin.h arm_neon.h arm_acle.h arm_fp16.h arm_cmse.h arm_bf16.h arm_mve.h"
+	extra_headers="mmintrin.h arm_neon.h arm_acle.h arm_fp16.h arm_cmse.h arm_bf16.h arm_mve_types.h arm_mve.h arm_cde.h"
 	target_type_format_char='%'
 	c_target_objs="arm-c.o"
 	cxx_target_objs="arm-c.o"
@@ -513,7 +513,7 @@ powerpc*-*-*)
 	extra_headers="${extra_headers} ppu_intrinsics.h spu2vmx.h vec_types.h si2vmx.h"
 	extra_headers="${extra_headers} amo.h"
 	case x$with_cpu in
-	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[3456789]|xpower6x|xrs64a|xcell|xa2|xe500mc64|xe5500|xe6500|xfuture)
+	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[3456789]|xpower10|xpower6x|xrs64a|xcell|xa2|xe500mc64|xe5500|xe6500)
 		cpu_is_64bit=yes
 		;;
 	esac
@@ -662,7 +662,7 @@ pentium4 pentium4m pentiumpro prescott lakemont"
 # 64-bit x86 processors supported by --with-arch=.  Each processor
 # MUST be separated by exactly one space.
 x86_64_archs="amdfam10 athlon64 athlon64-sse3 barcelona bdver1 bdver2 \
-bdver3 bdver4 znver1 znver2 btver1 btver2 k8 k8-sse3 opteron \
+bdver3 bdver4 znver1 znver2 znver3 btver1 btver2 k8 k8-sse3 opteron \
 opteron-sse3 nocona core2 corei7 corei7-avx core-avx-i core-avx2 atom \
 slm nehalem westmere sandybridge ivybridge haswell broadwell bonnell \
 silvermont knl knm skylake-avx512 cannonlake icelake-client icelake-server \
@@ -678,17 +678,47 @@ case ${target} in
 *-*-darwin*)
   tmake_file="t-darwin "
   tm_file="${tm_file} darwin.h"
+  darwin_os=`echo ${target} | sed 's/.*darwin\([0-9.]*\).*$/\1/'`
+  darwin_maj=`expr "$darwin_os" : '\([0-9]*\).*'`
+  macos_min=`expr "$darwin_os" : '[0-9]*\.\([0-9]*\).*'`
+  macos_maj=10
+  if test x"${macos_min}" = x; then
+    macos_min=0
+  fi
+  def_ld64=85.2
   case ${target} in
-  *-*-darwin9*)
-    tm_file="${tm_file} darwin9.h"
-    ;;
-  *-*-darwin[1][01]*)
-    tm_file="${tm_file} darwin9.h darwin10.h"
-    ;;
-  *-*-darwin[1][2-9]* | *-*-darwin[2][0-9]*)
-    tm_file="${tm_file} darwin9.h darwin10.h darwin12.h"
-    ;;
+      # Darwin 4 to 19 correspond to macOS 10.0 to 10.15
+      *-*-darwin[4-9]* | *-*-darwin1[0-9]*)
+        macos_min=`expr $darwin_maj - 4`
+        ;;
+      *-*-darwin20*)
+        # Darwin 20 corresponds to macOS 11.
+        macos_maj=11
+        def_ld64=609.0
+        ;;
+      *-*-darwin)
+        case ${cpu_type} in
+          aarch64) macos_maj=11 ;;
+          x86_64) macos_min=6 ;;
+          *)  macos_min=5 ;;
+          esac
+          case ${host} in
+            *-*-darwin*) tm_defines="$tm_defines DARWIN_USE_KERNEL_VERS" ;;
+            *)
+              # If configuring a cross-compiler then we will have set some
+              # default above, but it is probably not what was intended.
+              echo "Warning: Using ${target} is only suitable for Darwin hosts" 1>&2
+              echo "configure with an explicit target version" 1>&2
+              ;;
+          esac
+        ;;
+      *)
+        echo "Error: configuring for an unreleased macOS version ${target}" 1>&2
+        exit 1
+        ;;
   esac
+  tm_defines="$tm_defines DEF_MIN_OSX_VERSION=\\\"${macos_maj}.${macos_min}\\\""
+  tm_defines="$tm_defines DEF_LD64=\\\"${def_ld64}\\\""
   tm_file="${tm_file} ${cpu_type}/darwin.h"
   tm_p_file="${tm_p_file} darwin-protos.h"
   target_gtfiles="$target_gtfiles \$(srcdir)/config/darwin.c"
@@ -1192,7 +1222,7 @@ arm-wrs-vxworks7*)
 	tmake_file="${tmake_file} arm/t-arm arm/t-vxworks arm/t-bpabi"
 	tm_file="elfos.h arm/elf.h arm/bpabi.h arm/aout.h ${tm_file}"
 	tm_file="${tm_file} vx-common.h vxworks.h arm/vxworks.h"
-	target_cpu_cname="armv7-a"
+	target_cpu_cname="generic-armv7-a"
 	need_64bit_hwint=yes
 	;;
 arm*-*-freebsd*)                # ARM FreeBSD EABI
@@ -1490,6 +1520,7 @@ bfin*-*)
 	use_gcc_stdint=wrap
 	;;
 bpf-*-*)
+        tm_file="elfos.h ${tm_file}"
         tmake_file="${tmake_file} bpf/t-bpf"
         use_collect2=no
         extra_headers="bpf-helpers.h"
@@ -2846,7 +2877,6 @@ powerpc-*-darwin*)
 	  *-darwin8*)
 	    tmake_file="${tmake_file} ${cpu_type}/t-darwin32-biarch"
 	    tm_file="${tm_file} ${cpu_type}/darwin32-biarch.h"
-	    tm_file="${tm_file} ${cpu_type}/darwin8.h"
 	    ;;
 	  *-darwin7*)
 	    tm_file="${tm_file} ${cpu_type}/darwin7.h"
@@ -2867,6 +2897,10 @@ powerpc*-*-freebsd*)
 	tm_file="${tm_file} dbxelf.h elfos.h gnu-user.h ${fbsd_tm_file} rs6000/sysv4.h"
 	extra_options="${extra_options} rs6000/sysv4.opt"
 	tmake_file="rs6000/t-fprules rs6000/t-ppcos ${tmake_file} rs6000/t-ppccomm"
+	case ${target} in
+	    powerpc*le-*-*)
+		tm_file="${tm_file} rs6000/sysv4le.h" ;;
+	esac
 	case ${target} in
 	     powerpc64*)
 	    	tm_file="${tm_file} rs6000/default64.h rs6000/freebsd64.h"
@@ -3537,7 +3571,9 @@ esac
 case ${target} in
 *-*-linux*android*|*-*-linux*uclibc*|*-*-linux*musl*)
         ;;
-*-*-linux*)
+*-*-kfreebsd*-gnu | *-*-kopensolaris*-gnu)
+        ;;
+*-*-linux* | *-*-gnu*)
 	case ${target} in
 	aarch64*-* | arm*-* | i[34567]86-* | powerpc*-* | s390*-* | sparc*-* | x86_64-*)
 		default_gnu_indirect_function=yes
@@ -3650,6 +3686,10 @@ case ${target} in
       znver2-*)
 	arch=znver2
 	cpu=znver2
+	;;
+      znver3-*)
+	arch=znver3
+	cpu=znver3
 	;;
       bdver4-*)
         arch=bdver4
@@ -3771,6 +3811,10 @@ case ${target} in
       znver2-*)
 	arch=znver2
 	cpu=znver2
+	;;
+      znver3-*)
+	arch=znver3
+	cpu=znver3
 	;;
       bdver4-*)
         arch=bdver4
@@ -4064,9 +4108,17 @@ fi
 supported_defaults=
 case "${target}" in
 	aarch64*-*-*)
-		supported_defaults="abi cpu arch"
-		for which in cpu arch; do
-
+		supported_defaults="abi cpu cpu_64 arch arch_64 tune tune_64"
+		if test x$with_cpu_64 != x && test x$with_cpu = x; then
+			with_cpu=$with_cpu_64
+		fi
+		if test x$with_arch_64 != x && test x$with_arch = x; then
+			with_arch=$with_arch_64
+		fi
+		if test x$with_tune_64 != x && test x$with_tune = x; then
+			with_tune=$with_tune_64
+		fi
+		for which in cpu arch tune; do
 			eval "val=\$with_$which"
 			base_val=`echo $val | sed -e 's/\+.*//'`
 			ext_val=`echo $val | sed -e 's/[a-z0-9.-]\+//'`
@@ -4103,6 +4155,12 @@ case "${target}" in
 				  ${srcdir}/config/aarch64/$def | \
 				  sed -e 's/^[^,]*,[ 	]*//' | \
 				  sed -e 's/,.*$//'`
+			  fi
+
+			  # Disallow extensions in --with-tune=cortex-a53+crc.
+			  if [ $which = tune ] && [ x"$ext_val" != x ]; then
+			    echo "Architecture extensions not supported in --with-$which=$val" 1>&2
+			    exit 1
 			  fi
 
 			  # Use the pre-processor to strip flatten the options.
@@ -4162,8 +4220,13 @@ case "${target}" in
 			  fi
 			  true
 			else
-			  echo "Unknown $which used in --with-$which=$val" 1>&2
-			  exit 1
+			  # Allow --with-$which=native.
+			  if [ "$val" = native ]; then
+			    true
+			  else
+			    echo "Unknown $which used in --with-$which=$val" 1>&2
+			    exit 1
+			  fi
 			fi
 		done
 		;;
@@ -4928,7 +4991,7 @@ case "${target}" in
 				eval "with_$which=405"
 				;;
 			"" | common | native \
-			| power[3456789] | power5+ | power6x \
+			| power[3456789] | power10 | power5+ | power6x \
 			| powerpc | powerpc64 | powerpc64le \
 			| rs64 \
 			| 401 | 403 | 405 | 405fp | 440 | 440fp | 464 | 464fp \

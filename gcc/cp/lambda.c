@@ -223,7 +223,10 @@ lambda_capture_field_type (tree expr, bool explicit_init_p,
 	/* Add the reference now, so deduction doesn't lose
 	   outermost CV qualifiers of EXPR.  */
 	type = build_reference_type (type);
-      type = do_auto_deduction (type, expr, auto_node);
+      if (uses_parameter_packs (expr))
+	/* Stick with 'auto' even if the type could be deduced.  */;
+      else
+	type = do_auto_deduction (type, expr, auto_node);
     }
   else if (!is_this && type_dependent_expression_p (expr))
     {
@@ -1339,7 +1342,8 @@ is_lambda_ignored_entity (tree val)
 
   /* None of the lookups that use qualify_lookup want the op() from the
      lambda; they want the one from the enclosing class.  */
-  if (TREE_CODE (val) == FUNCTION_DECL && LAMBDA_FUNCTION_P (val))
+  val = OVL_FIRST (val);
+  if (LAMBDA_FUNCTION_P (val))
     return true;
 
   return false;

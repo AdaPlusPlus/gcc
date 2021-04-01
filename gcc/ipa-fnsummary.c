@@ -503,6 +503,32 @@ evaluate_conditions_for_known_args (struct cgraph_node *node,
     *ret_nonspec_clause = nonspec_clause;
 }
 
+/* Return true if VRP will be exectued on the function.
+   We do not want to anticipate optimizations that will not happen.
+
+   FIXME: This can be confused with -fdisable and debug counters and thus
+   it should not be used for correctness (only to make heuristics work).
+   This means that inliner should do its own optimizations of expressions
+   that it predicts to be constant so wrong code can not be triggered by
+   builtin_constant_p.  */
+
+static bool
+vrp_will_run_p (struct cgraph_node *node)
+{
+  return (opt_for_fn (node->decl, optimize)
+	  && !opt_for_fn (node->decl, optimize_debug)
+	  && opt_for_fn (node->decl, flag_tree_vrp));
+}
+
+/* Similarly about FRE.  */
+
+static bool
+fre_will_run_p (struct cgraph_node *node)
+{
+  return (opt_for_fn (node->decl, optimize)
+	  && !opt_for_fn (node->decl, optimize_debug)
+	  && opt_for_fn (node->decl, flag_tree_fre));
+}
 
 /* Work out what conditions might be true at invocation of E.
    Compute costs for inlined edge if INLINE_P is true.
@@ -594,6 +620,7 @@ evaluate_properties_for_edge (struct cgraph_edge *e, bool inline_p,
 
 		/* If we failed to get simple constant, try value range.  */
 		if ((!cst || TREE_CODE (cst) != INTEGER_CST)
+		    && vrp_will_run_p (caller)
 		    && ipa_is_param_used_by_ipa_predicates (callee_pi, i))
 		  {
 		    value_range vr 
@@ -609,14 +636,17 @@ evaluate_properties_for_edge (struct cgraph_edge *e, bool inline_p,
 		  }
 
 		/* Determine known aggregate values.  */
-		ipa_agg_value_set agg
-		    = ipa_agg_value_set_from_jfunc (caller_parms_info,
-						    caller, &jf->agg);
-		if (agg.items.length ())
+		if (fre_will_run_p (caller))
 		  {
-		    if (!known_aggs_ptr->length ())
-		      vec_safe_grow_cleared (known_aggs_ptr, count);
-		    (*known_aggs_ptr)[i] = agg;
+		    ipa_agg_value_set agg
+			= ipa_agg_value_set_from_jfunc (caller_parms_info,
+							caller, &jf->agg);
+		    if (agg.items.length ())
+		      {
+			if (!known_aggs_ptr->length ())
+			  vec_safe_grow_cleared (known_aggs_ptr, count);
+			(*known_aggs_ptr)[i] = agg;
+		      }
 		  }
 	      }
 
@@ -2736,7 +2766,10 @@ analyze_function_body (struct cgraph_node *node, bool early)
 	  edge ex;
 	  unsigned int j;
 	  class tree_niter_desc niter_desc;
-	  bb_predicate = *(predicate *) loop->header->aux;
+	  if (loop->header->aux)
+	    bb_predicate = *(predicate *) loop->header->aux;
+	  else
+	    bb_predicate = false;
 
 	  exits = get_loop_exit_edges (loop);
 	  FOR_EACH_VEC_ELT (exits, j, ex)
@@ -2769,7 +2802,10 @@ analyze_function_body (struct cgraph_node *node, bool early)
 	  for (unsigned i = 0; i < loop->num_nodes; i++)
 	    {
 	      gimple_stmt_iterator gsi;
-	      bb_predicate = *(predicate *) body[i]->aux;
+	      if (body[i]->aux)
+		bb_predicate = *(predicate *) body[i]->aux;
+	      else
+		bb_predicate = false;
 	      for (gsi = gsi_start_bb (body[i]); !gsi_end_p (gsi);
 		   gsi_next (&gsi))
 		{
@@ -2950,11 +2986,18 @@ compute_fn_summary (struct cgraph_node *node, bool early)
   info->estimated_stack_size = size_info->estimated_self_stack_size;
 
   /* Code above should compute exactly the same result as
-     ipa_update_overall_fn_summary but because computation happens in
-     different order the roundoff errors result in slight changes.  */
+     ipa_update_overall_fn_summary except for case when speculative
+     edges are present since these are accounted to size but not
+     self_size. Do not compare time since different order the roundoff
+     errors result in slight changes.  */
   ipa_update_overall_fn_summary (node);
-  /* In LTO mode we may have speculative edges set.  */
-  gcc_assert (in_lto_p || size_info->size == size_info->self_size);
+  if (flag_checking)
+    {
+      for (e = node->indirect_calls; e; e = e->next_callee)
+       if (e->speculative)
+	 break;
+      gcc_assert (e || size_info->size == size_info->self_size);
+    }
 }
 
 
@@ -4310,6 +4353,7 @@ ipa_fn_summary_read (void)
   struct lto_file_decl_data *file_data;
   unsigned int j = 0;
 
+  ipa_prop_read_jump_functions ();
   ipa_fn_summary_alloc ();
 
   while ((file_data = file_data_vec[j++]))
@@ -4328,8 +4372,6 @@ ipa_fn_summary_read (void)
 		     "ipa inline summary is missing in input file");
     }
   ipa_register_cgraph_hooks ();
-  if (!flag_ipa_cp)
-    ipa_prop_read_jump_functions ();
 
   gcc_assert (ipa_fn_summaries);
   ipa_fn_summaries->enable_insertion_hook ();
@@ -4464,8 +4506,7 @@ ipa_fn_summary_write (void)
   produce_asm (ob, NULL);
   destroy_output_block (ob);
 
-  if (!flag_ipa_cp)
-    ipa_prop_write_jump_functions ();
+  ipa_prop_write_jump_functions ();
 }
 
 

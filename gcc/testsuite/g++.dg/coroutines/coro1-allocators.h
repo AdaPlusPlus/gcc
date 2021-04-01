@@ -100,7 +100,7 @@ struct coro1 {
     PRINT ("get initial_suspend (always)");
     return suspend_always_prt{};
   }
-  auto final_suspend () {
+  auto final_suspend () noexcept {
     PRINT ("get final_suspend (always)");
     return suspend_always_prt{};
   }
@@ -172,8 +172,11 @@ struct coro1 {
   }
 #endif
 
+#ifndef BAD_GROOAF_STATIC
+# define BAD_GROOAF_STATIC static
+#endif
 #ifdef PROVIDE_GROOAF
-  static coro1 get_return_object_on_allocation_failure () noexcept {
+  BAD_GROOAF_STATIC coro1 get_return_object_on_allocation_failure () noexcept {
     PRINT ("alloc fail return");
     used_grooaf++;
     return coro1 (nullptr);

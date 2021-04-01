@@ -423,6 +423,7 @@ tree gfc_class_data_get (tree);
 tree gfc_class_vptr_get (tree);
 tree gfc_class_len_get (tree);
 tree gfc_class_len_or_zero_get (tree);
+tree gfc_resize_class_size_with_len (stmtblock_t *, tree, tree);
 gfc_expr * gfc_find_and_cut_at_last_class_ref (gfc_expr *, bool is_mold = false);
 /* Get an accessor to the class' vtab's * field, when a class handle is
    available.  */
@@ -442,6 +443,7 @@ tree gfc_vptr_final_get (tree);
 tree gfc_vptr_deallocate_get (tree);
 void gfc_reset_vptr (stmtblock_t *, gfc_expr *);
 void gfc_reset_len (stmtblock_t *, gfc_expr *);
+tree gfc_get_class_from_gfc_expr (gfc_expr *);
 tree gfc_get_class_from_expr (tree);
 tree gfc_get_vptr_from_expr (tree);
 tree gfc_get_class_array_ref (tree, tree, tree, bool);
@@ -561,7 +563,7 @@ void gfc_trans_common (gfc_namespace *);
 void gfc_conv_structure (gfc_se *, gfc_expr *, int);
 
 /* Return an expression which determines if a dummy parameter is present.  */
-tree gfc_conv_expr_present (gfc_symbol *);
+tree gfc_conv_expr_present (gfc_symbol *, bool use_saved_decl = false);
 /* Convert a missing, dummy argument into a null or zero.  */
 void gfc_conv_missing_dummy (gfc_se *, gfc_expr *, gfc_typespec, int);
 

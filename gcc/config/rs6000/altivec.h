@@ -161,6 +161,7 @@
 #define vec_vmsumubm __builtin_vec_vmsumubm
 #define vec_vmsumshs __builtin_vec_vmsumshs
 #define vec_vmsumuhs __builtin_vec_vmsumuhs
+#define vec_vmsumudm __builtin_vec_vmsumudm
 #define vec_vmulesb __builtin_vec_vmulesb
 #define vec_vmulesh __builtin_vec_vmulesh
 #define vec_vmuleuh __builtin_vec_vmuleuh
@@ -406,10 +407,6 @@
 #define vec_vpopcnth __builtin_vec_vpopcnth
 #define vec_vpopcntw __builtin_vec_vpopcntw
 #define vec_popcnt __builtin_vec_vpopcntu
-#define vec_popcntb __builtin_vec_vpopcntub
-#define vec_popcnth __builtin_vec_vpopcntuh
-#define vec_popcntw __builtin_vec_vpopcntuw
-#define vec_popcntd __builtin_vec_vpopcntud
 #define vec_vrld __builtin_vec_vrld
 #define vec_vsld __builtin_vec_vsld
 #define vec_vsrad __builtin_vec_vsrad
@@ -433,7 +430,7 @@
 #define vec_first_match_or_eos_index __builtin_vec_first_match_or_eos_index
 #define vec_first_mismatch_index __builtin_vec_first_mismatch_index
 #define vec_first_mismatch_or_eos_index __builtin_vec_first_mismatch_or_eos_index
-#define vec_pack_to_short_fp32 __builtin_vec_convert_4f32_8i16
+#define vec_pack_to_short_fp32 __builtin_vec_convert_4f32_8f16
 #define vec_parity_lsbb __builtin_vec_vparity_lsbb
 #define vec_vctz __builtin_vec_vctz
 #define vec_cnttz __builtin_vec_vctz

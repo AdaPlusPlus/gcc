@@ -1429,6 +1429,48 @@ structural_comptypes (tree t1, tree t2, int strict)
 	  || maybe_ne (TYPE_VECTOR_SUBPARTS (t1), TYPE_VECTOR_SUBPARTS (t2))
 	  || !same_type_p (TREE_TYPE (t1), TREE_TYPE (t2)))
 	return false;
+
+      /* This hack is specific to release branches and fixes PR95726 for
+	 arm and aarch64 targets.  The idea is to treat GNU and Advanced
+	 SIMD types as distinct types for template specialization, but to
+	 treat them as the same type for other purposes.  For example:
+
+	    typedef float vecf __attribute__((vector_size(16)));
+	    template<typename T> struct bar;
+	    template<> struct bar<vecf> { static const int x = 1; };
+	    template<> struct bar<float32x4_t> { static const int x = 2; };
+	    static_assert(bar<vecf>::x + bar<float32x4_t>::x == 3, "boo");
+
+	 is supposed to be valid, and so "vecf" and "float32x4_t" should
+	 be different for at least template specialization.  However,
+	 GCC 10 and earlier also allowed things like:
+
+	    vecf x;
+	    float32x4_t &z = x;
+
+	 and:
+
+	    vecf x;
+	    float32x4_t y;
+	    ... c ? x : y ...
+
+	 both of which require "vecf" and "float32x4_t" to be the same.
+
+	 This was fixed in GCC 11+ by making the types distinct in all
+	 contexts, making the reference binding and ?: expression above
+	 invalid.  However, it would be inappropriate to change the
+	 semantics like that in release branches, so we do this instead.
+	 The space in the attribute name prevents any clash with user-
+	 specified attributes.  */
+      if (comparing_specializations)
+	{
+	  bool asimd1 = lookup_attribute ("Advanced SIMD type",
+					  TYPE_ATTRIBUTES (t1));
+	  bool asimd2 = lookup_attribute ("Advanced SIMD type",
+					  TYPE_ATTRIBUTES (t2));
+	  if (asimd1 != asimd2)
+	    return false;
+	}
       break;
 
     case TYPE_PACK_EXPANSION:
@@ -3318,6 +3360,22 @@ build_x_indirect_ref (location_t loc, tree expr, ref_operator errorstring,
     return rval;
 }
 
+/* Like c-family strict_aliasing_warning, but don't warn for dependent
+   types or expressions.  */
+
+static bool
+cp_strict_aliasing_warning (location_t loc, tree type, tree expr)
+{
+  if (processing_template_decl)
+    {
+      tree e = expr;
+      STRIP_NOPS (e);
+      if (dependent_type_p (type) || type_dependent_expression_p (e))
+	return false;
+    }
+  return strict_aliasing_warning (loc, type, expr);
+}
+
 /* The implementation of the above, and of indirection implied by other
    constructs.  If DO_FOLD is true, fold away INDIRECT_REF of ADDR_EXPR.  */
 
@@ -3360,10 +3418,10 @@ cp_build_indirect_ref_1 (location_t loc, tree ptr, ref_operator errorstring,
 	  /* If a warning is issued, mark it to avoid duplicates from
 	     the backend.  This only needs to be done at
 	     warn_strict_aliasing > 2.  */
-	  if (warn_strict_aliasing > 2)
-	    if (strict_aliasing_warning (EXPR_LOCATION (ptr),
-					 type, TREE_OPERAND (ptr, 0)))
-	      TREE_NO_WARNING (ptr) = 1;
+	  if (warn_strict_aliasing > 2
+	      && cp_strict_aliasing_warning (EXPR_LOCATION (ptr),
+					     type, TREE_OPERAND (ptr, 0)))
+	    TREE_NO_WARNING (ptr) = 1;
 	}
 
       if (VOID_TYPE_P (t))
@@ -3537,7 +3595,7 @@ cp_build_array_ref (location_t loc, tree array, tree idx,
 	 pointer arithmetic.)  */
       idx = cp_perform_integral_promotions (idx, complain);
 
-      idx = maybe_constant_value (idx);
+      idx = maybe_fold_non_dependent_expr (idx, complain);
 
       /* An array that is indexed by a non-constant
 	 cannot be stored in a register; we must be able to do
@@ -5606,7 +5664,9 @@ cp_build_binary_op (const op_location_t &location,
 	{
 	  int unsigned_arg;
 	  tree arg0 = get_narrower (op0, &unsigned_arg);
-	  tree const_op1 = cp_fold_rvalue (op1);
+	  /* We're not really warning here but when we set short_shift we
+	     used fold_for_warn to fold the operand.  */
+	  tree const_op1 = fold_for_warn (op1);
 
 	  final_type = result_type;
 
@@ -7777,7 +7837,7 @@ build_reinterpret_cast_1 (location_t loc, tree type, tree expr,
       expr = cp_build_addr_expr (expr, complain);
 
       if (warn_strict_aliasing > 2)
-	strict_aliasing_warning (EXPR_LOCATION (expr), type, expr);
+	cp_strict_aliasing_warning (EXPR_LOCATION (expr), type, expr);
 
       if (expr != error_mark_node)
 	expr = build_reinterpret_cast_1
@@ -7891,7 +7951,7 @@ build_reinterpret_cast_1 (location_t loc, tree type, tree expr,
 
       if (warn_strict_aliasing <= 2)
 	/* strict_aliasing_warning STRIP_NOPs its expr.  */
-	strict_aliasing_warning (EXPR_LOCATION (expr), type, expr);
+	cp_strict_aliasing_warning (EXPR_LOCATION (expr), type, expr);
 
       return build_nop_reinterpret (type, expr);
     }

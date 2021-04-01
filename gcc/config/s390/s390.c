@@ -7853,15 +7853,13 @@ print_operand (FILE *file, rtx x, int code)
   switch (code)
     {
     case 'A':
-#ifdef HAVE_AS_VECTOR_LOADSTORE_ALIGNMENT_HINTS
-      if (TARGET_Z14 && MEM_P (x))
+      if (TARGET_VECTOR_LOADSTORE_ALIGNMENT_HINTS && MEM_P (x))
 	{
 	  if (MEM_ALIGN (x) >= 128)
 	    fprintf (file, ",4");
 	  else if (MEM_ALIGN (x) == 64)
 	    fprintf (file, ",3");
 	}
-#endif
       return;
     case 'C':
       fprintf (file, s390_branch_condition_mnemonic (x, FALSE));
@@ -11911,6 +11909,8 @@ s390_function_arg_vector (machine_mode mode, const_tree type)
 
   /* The ABI says that record types with a single member are treated
      just like that member would be.  */
+  int empty_base_seen = 0;
+  const_tree orig_type = type;
   while (TREE_CODE (type) == RECORD_TYPE)
     {
       tree field, single = NULL_TREE;
@@ -11919,6 +11919,16 @@ s390_function_arg_vector (machine_mode mode, const_tree type)
 	{
 	  if (TREE_CODE (field) != FIELD_DECL)
 	    continue;
+
+	  if (DECL_FIELD_ABI_IGNORED (field))
+	    {
+	      if (lookup_attribute ("no_unique_address",
+				    DECL_ATTRIBUTES (field)))
+		empty_base_seen |= 2;
+	      else
+		empty_base_seen |= 1;
+	      continue;
+	    }
 
 	  if (single == NULL_TREE)
 	    single = TREE_TYPE (field);
@@ -11939,7 +11949,30 @@ s390_function_arg_vector (machine_mode mode, const_tree type)
 	}
     }
 
-  return VECTOR_TYPE_P (type);
+  if (!VECTOR_TYPE_P (type))
+    return false;
+
+  if (warn_psabi && empty_base_seen)
+    {
+      static unsigned last_reported_type_uid;
+      unsigned uid = TYPE_UID (TYPE_MAIN_VARIANT (orig_type));
+      if (uid != last_reported_type_uid)
+	{
+	  const char *url = CHANGES_ROOT_URL "gcc-10/changes.html#empty_base";
+	  last_reported_type_uid = uid;
+	  if (empty_base_seen & 1)
+	    inform (input_location,
+		    "parameter passing for argument of type %qT when C++17 "
+		    "is enabled changed to match C++14 %{in GCC 10.1%}",
+		    orig_type, url);
+	  else
+	    inform (input_location,
+		    "parameter passing for argument of type %qT with "
+		    "%<[[no_unique_address]]%> members changed "
+		    "%{in GCC 10.1%}", orig_type, url);
+	}
+    }
+  return true;
 }
 
 /* Return true if a function argument of type TYPE and mode MODE
@@ -11961,6 +11994,8 @@ s390_function_arg_float (machine_mode mode, const_tree type)
 
   /* The ABI says that record types with a single member are treated
      just like that member would be.  */
+  int empty_base_seen = 0;
+  const_tree orig_type = type;
   while (TREE_CODE (type) == RECORD_TYPE)
     {
       tree field, single = NULL_TREE;
@@ -11969,6 +12004,15 @@ s390_function_arg_float (machine_mode mode, const_tree type)
 	{
 	  if (TREE_CODE (field) != FIELD_DECL)
 	    continue;
+	  if (DECL_FIELD_ABI_IGNORED (field))
+	    {
+	      if (lookup_attribute ("no_unique_address",
+				    DECL_ATTRIBUTES (field)))
+		empty_base_seen |= 2;
+	      else
+		empty_base_seen |= 1;
+	      continue;
+	    }
 
 	  if (single == NULL_TREE)
 	    single = TREE_TYPE (field);
@@ -11982,7 +12026,31 @@ s390_function_arg_float (machine_mode mode, const_tree type)
 	type = single;
     }
 
-  return TREE_CODE (type) == REAL_TYPE;
+  if (TREE_CODE (type) != REAL_TYPE)
+    return false;
+
+  if (warn_psabi && empty_base_seen)
+    {
+      static unsigned last_reported_type_uid;
+      unsigned uid = TYPE_UID (TYPE_MAIN_VARIANT (orig_type));
+      if (uid != last_reported_type_uid)
+	{
+	  const char *url = CHANGES_ROOT_URL "gcc-10/changes.html#empty_base";
+	  last_reported_type_uid = uid;
+	  if (empty_base_seen & 1)
+	    inform (input_location,
+		    "parameter passing for argument of type %qT when C++17 "
+		    "is enabled changed to match C++14 %{in GCC 10.1%}",
+		    orig_type, url);
+	  else
+	    inform (input_location,
+		    "parameter passing for argument of type %qT with "
+		    "%<[[no_unique_address]]%> members changed "
+		    "%{in GCC 10.1%}", orig_type, url);
+	}
+    }
+
+  return true;
 }
 
 /* Return true if a function argument of type TYPE and mode MODE
@@ -15971,12 +16039,13 @@ s390_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
 
      fenv_var = __builtin_s390_efpc ();
      __builtin_s390_sfpc (fenv_var & mask) */
-  tree old_fpc = build2 (MODIFY_EXPR, unsigned_type_node, fenv_var, call_efpc);
-  tree new_fpc =
-    build2 (BIT_AND_EXPR, unsigned_type_node, fenv_var,
-	    build_int_cst (unsigned_type_node,
-			   ~(FPC_DXC_MASK | FPC_FLAGS_MASK |
-			     FPC_EXCEPTION_MASK)));
+  tree old_fpc = build4 (TARGET_EXPR, unsigned_type_node, fenv_var, call_efpc,
+			 NULL_TREE, NULL_TREE);
+  tree new_fpc
+    = build2 (BIT_AND_EXPR, unsigned_type_node, fenv_var,
+	      build_int_cst (unsigned_type_node,
+			     ~(FPC_DXC_MASK | FPC_FLAGS_MASK
+			       | FPC_EXCEPTION_MASK)));
   tree set_new_fpc = build_call_expr (sfpc, 1, new_fpc);
   *hold = build2 (COMPOUND_EXPR, void_type_node, old_fpc, set_new_fpc);
 
@@ -15995,8 +16064,8 @@ s390_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
   __atomic_feraiseexcept ((old_fpc & FPC_FLAGS_MASK) >> FPC_FLAGS_SHIFT);  */
 
   old_fpc = create_tmp_var_raw (unsigned_type_node);
-  tree store_old_fpc = build2 (MODIFY_EXPR, void_type_node,
-			       old_fpc, call_efpc);
+  tree store_old_fpc = build4 (TARGET_EXPR, void_type_node, old_fpc, call_efpc,
+			       NULL_TREE, NULL_TREE);
 
   set_new_fpc = build_call_expr (sfpc, 1, fenv_var);
 

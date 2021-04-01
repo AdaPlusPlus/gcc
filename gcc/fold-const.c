@@ -5770,8 +5770,22 @@ fold_cond_expr_with_comparison (location_t loc, tree type,
       case LT_EXPR:
 	if (TYPE_UNSIGNED (TREE_TYPE (arg1)))
 	  break;
-	tem = fold_build1_loc (loc, ABS_EXPR, TREE_TYPE (arg1), arg1);
-	return negate_expr (fold_convert_loc (loc, type, tem));
+	if (ANY_INTEGRAL_TYPE_P (TREE_TYPE (arg1))
+	    && !TYPE_OVERFLOW_WRAPS (TREE_TYPE (arg1)))
+	  {
+	    /* A <= 0 ? A : -A for A INT_MIN is valid, but -abs(INT_MIN)
+	       is not, invokes UB both in abs and in the negation of it.
+	       So, use ABSU_EXPR instead.  */
+	    tree utype = unsigned_type_for (TREE_TYPE (arg1));
+	    tem = fold_build1_loc (loc, ABSU_EXPR, utype, arg1);
+	    tem = negate_expr (tem);
+	    return fold_convert_loc (loc, type, tem);
+	  }
+	else
+	  {
+	    tem = fold_build1_loc (loc, ABS_EXPR, TREE_TYPE (arg1), arg1);
+	    return negate_expr (fold_convert_loc (loc, type, tem));
+	  }
       default:
 	gcc_assert (TREE_CODE_CLASS (comp_code) == tcc_comparison);
 	break;
@@ -5917,6 +5931,13 @@ fold_range_test (location_t loc, enum tree_code code, tree type,
     return 0;
 
   lhs = make_range (op0, &in0_p, &low0, &high0, &strict_overflow_p);
+  /* If op0 is known true or false and this is a short-circuiting
+     operation we must not merge with op1 since that makes side-effects
+     unconditional.  So special-case this.  */
+  if (!lhs
+      && ((code == TRUTH_ORIF_EXPR && in0_p)
+	  || (code == TRUTH_ANDIF_EXPR && !in0_p)))
+    return op0;
   rhs = make_range (op1, &in1_p, &low1, &high1, &strict_overflow_p);
 
   /* If this is an OR operation, invert both sides; we will invert
@@ -6637,6 +6658,8 @@ extract_muldiv_1 (tree t, tree c, enum tree_code code, tree wide_type,
       break;
 
     CASE_CONVERT: case NON_LVALUE_EXPR:
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (op0)))
+	break;
       /* If op0 is an expression ...  */
       if ((COMPARISON_CLASS_P (op0)
 	   || UNARY_CLASS_P (op0)
@@ -6645,8 +6668,7 @@ extract_muldiv_1 (tree t, tree c, enum tree_code code, tree wide_type,
 	   || EXPRESSION_CLASS_P (op0))
 	  /* ... and has wrapping overflow, and its type is smaller
 	     than ctype, then we cannot pass through as widening.  */
-	  && (((ANY_INTEGRAL_TYPE_P (TREE_TYPE (op0))
-		&& TYPE_OVERFLOW_WRAPS (TREE_TYPE (op0)))
+	  && ((TYPE_OVERFLOW_WRAPS (TREE_TYPE (op0))
 	       && (TYPE_PRECISION (ctype)
 	           > TYPE_PRECISION (TREE_TYPE (op0))))
 	      /* ... or this is a truncation (t is narrower than op0),
@@ -6661,8 +6683,7 @@ extract_muldiv_1 (tree t, tree c, enum tree_code code, tree wide_type,
 	      /* ... or has undefined overflow while the converted to
 		 type has not, we cannot do the operation in the inner type
 		 as that would introduce undefined overflow.  */
-	      || ((ANY_INTEGRAL_TYPE_P (TREE_TYPE (op0))
-		   && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (op0)))
+	      || (TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (op0))
 		  && !TYPE_OVERFLOW_UNDEFINED (type))))
 	break;
 
@@ -7922,21 +7943,21 @@ native_encode_initializer (tree init, unsigned char *ptr, int len,
       int o = off == -1 ? 0 : off;
       if (TREE_CODE (type) == ARRAY_TYPE)
 	{
-	  HOST_WIDE_INT min_index;
+	  tree min_index;
 	  unsigned HOST_WIDE_INT cnt;
 	  HOST_WIDE_INT curpos = 0, fieldsize;
 	  constructor_elt *ce;
 
-	  if (TYPE_DOMAIN (type) == NULL_TREE
-	      || !tree_fits_shwi_p (TYPE_MIN_VALUE (TYPE_DOMAIN (type))))
+	  if (!TYPE_DOMAIN (type)
+	      || TREE_CODE (TYPE_MIN_VALUE (TYPE_DOMAIN (type))) != INTEGER_CST)
 	    return 0;
 
 	  fieldsize = int_size_in_bytes (TREE_TYPE (type));
 	  if (fieldsize <= 0)
 	    return 0;
 
-	  min_index = tree_to_shwi (TYPE_MIN_VALUE (TYPE_DOMAIN (type)));
-	  if (ptr != NULL)
+	  min_index = TYPE_MIN_VALUE (TYPE_DOMAIN (type));
+	  if (ptr)
 	    memset (ptr, '\0', MIN (total_bytes - off, len));
 
 	  FOR_EACH_VEC_SAFE_ELT (CONSTRUCTOR_ELTS (init), cnt, ce)
@@ -7947,19 +7968,37 @@ native_encode_initializer (tree init, unsigned char *ptr, int len,
 	      bool full = false;
 	      if (index && TREE_CODE (index) == RANGE_EXPR)
 		{
-		  if (!tree_fits_shwi_p (TREE_OPERAND (index, 0))
-		      || !tree_fits_shwi_p (TREE_OPERAND (index, 1)))
+		  if (TREE_CODE (TREE_OPERAND (index, 0)) != INTEGER_CST
+		      || TREE_CODE (TREE_OPERAND (index, 1)) != INTEGER_CST)
 		    return 0;
-		  pos = (tree_to_shwi (TREE_OPERAND (index, 0)) - min_index)
-			* fieldsize;
-		  count = (tree_to_shwi (TREE_OPERAND (index, 1))
-			   - tree_to_shwi (TREE_OPERAND (index, 0)));
+		  offset_int wpos
+		    = wi::sext (wi::to_offset (TREE_OPERAND (index, 0))
+				- wi::to_offset (min_index),
+				TYPE_PRECISION (sizetype));
+		  wpos *= fieldsize;
+		  if (!wi::fits_shwi_p (pos))
+		    return 0;
+		  pos = wpos.to_shwi ();
+		  offset_int wcount
+		    = wi::sext (wi::to_offset (TREE_OPERAND (index, 1))
+				- wi::to_offset (TREE_OPERAND (index, 0)),
+				TYPE_PRECISION (sizetype));
+		  if (!wi::fits_shwi_p (wcount))
+		    return 0;
+		  count = wcount.to_shwi ();
 		}
 	      else if (index)
 		{
-		  if (!tree_fits_shwi_p (index))
+		  if (TREE_CODE (index) != INTEGER_CST)
 		    return 0;
-		  pos = (tree_to_shwi (index) - min_index) * fieldsize;
+		  offset_int wpos
+		    = wi::sext (wi::to_offset (index)
+				- wi::to_offset (min_index),
+				TYPE_PRECISION (sizetype));
+		  wpos *= fieldsize;
+		  if (!wi::fits_shwi_p (wpos))
+		    return 0;
+		  pos = wpos.to_shwi ();
 		}
 
 	      curpos = pos;
@@ -8198,7 +8237,19 @@ native_interpret_real (tree type, const unsigned char *ptr, int len)
     }
 
   real_from_target (&r, tmp, mode);
-  return build_real (type, r);
+  tree ret = build_real (type, r);
+  if (MODE_COMPOSITE_P (mode))
+    {
+      /* For floating point values in composite modes, punt if this folding
+	 doesn't preserve bit representation.  As the mode doesn't have fixed
+	 precision while GCC pretends it does, there could be valid values that
+	 GCC can't really represent accurately.  See PR95450.  */
+      unsigned char buf[24];
+      if (native_encode_expr (ret, buf, total_bytes, 0) != total_bytes
+	  || memcmp (ptr, buf, total_bytes) != 0)
+	ret = NULL_TREE;
+    }
+  return ret;
 }
 
 
@@ -11452,23 +11503,23 @@ fold_binary_loc (location_t loc, enum tree_code code, tree type,
 	      && integer_onep (TREE_OPERAND (arg00, 0)))
 	    {
 	      tree tem = fold_build2_loc (loc, RSHIFT_EXPR, TREE_TYPE (arg00),
-				      arg01, TREE_OPERAND (arg00, 1));
+					  arg01, TREE_OPERAND (arg00, 1));
 	      tem = fold_build2_loc (loc, BIT_AND_EXPR, TREE_TYPE (arg0), tem,
-				 build_int_cst (TREE_TYPE (arg0), 1));
+				     build_one_cst (TREE_TYPE (arg0)));
 	      return fold_build2_loc (loc, code, type,
-				  fold_convert_loc (loc, TREE_TYPE (arg1), tem),
-				  arg1);
+				      fold_convert_loc (loc, TREE_TYPE (arg1),
+							tem), arg1);
 	    }
 	  else if (TREE_CODE (arg01) == LSHIFT_EXPR
 		   && integer_onep (TREE_OPERAND (arg01, 0)))
 	    {
 	      tree tem = fold_build2_loc (loc, RSHIFT_EXPR, TREE_TYPE (arg01),
-				      arg00, TREE_OPERAND (arg01, 1));
+					  arg00, TREE_OPERAND (arg01, 1));
 	      tem = fold_build2_loc (loc, BIT_AND_EXPR, TREE_TYPE (arg0), tem,
-				 build_int_cst (TREE_TYPE (arg0), 1));
+				     build_one_cst (TREE_TYPE (arg0)));
 	      return fold_build2_loc (loc, code, type,
-				  fold_convert_loc (loc, TREE_TYPE (arg1), tem),
-				  arg1);
+				      fold_convert_loc (loc, TREE_TYPE (arg1),
+							tem), arg1);
 	    }
 	}
 
@@ -14615,7 +14666,7 @@ fold_read_from_constant_string (tree exp)
       if (string
 	  && TYPE_MODE (TREE_TYPE (exp)) == TYPE_MODE (TREE_TYPE (TREE_TYPE (string)))
 	  && TREE_CODE (string) == STRING_CST
-	  && TREE_CODE (index) == INTEGER_CST
+	  && tree_fits_uhwi_p (index)
 	  && compare_tree_int (index, TREE_STRING_LENGTH (string)) < 0
 	  && is_int_mode (TYPE_MODE (TREE_TYPE (TREE_TYPE (string))),
 			  &char_mode)
@@ -15407,24 +15458,29 @@ fold_build_pointer_plus_hwi_loc (location_t loc, tree ptr, HOST_WIDE_INT off)
 			  ptr, size_int (off));
 }
 
-/* Return a pointer P to a NUL-terminated string representing the sequence
-   of constant characters referred to by SRC (or a subsequence of such
-   characters within it if SRC is a reference to a string plus some
-   constant offset).  If STRLEN is non-null, store the number of bytes
-   in the string constant including the terminating NUL char.  *STRLEN is
-   typically strlen(P) + 1 in the absence of embedded NUL characters.  */
+/* Return a pointer P to a NUL-terminated string containing the sequence
+   of bytes corresponding to the representation of the object referred to
+   by SRC (or a subsequence of such bytes within it if SRC is a reference
+   to an initialized constant array plus some constant offset).
+   If STRSIZE is non-null, store the number of bytes in the constant
+   sequence including the terminating NUL byte.  *STRSIZE is equal to
+   sizeof(A) - OFFSET where A is the array that stores the constant
+   sequence that SRC points to and OFFSET is the byte offset of SRC from
+   the beginning of A.  SRC need not point to a string or even an array
+   of characters but may point to an object of any type.  */
 
 const char *
-c_getstr (tree src, unsigned HOST_WIDE_INT *strlen /* = NULL */)
+c_getstr (tree src, unsigned HOST_WIDE_INT *strsize /* = NULL */)
 {
+  /* The offset into the array A storing the string, and A's byte size.  */
   tree offset_node;
   tree mem_size;
 
-  if (strlen)
-    *strlen = 0;
+  if (strsize)
+    *strsize = 0;
 
   src = string_constant (src, &offset_node, &mem_size, NULL);
-  if (src == 0)
+  if (!src)
     return NULL;
 
   unsigned HOST_WIDE_INT offset = 0;
@@ -15439,34 +15495,44 @@ c_getstr (tree src, unsigned HOST_WIDE_INT *strlen /* = NULL */)
   if (!tree_fits_uhwi_p (mem_size))
     return NULL;
 
-  /* STRING_LENGTH is the size of the string literal, including any
-     embedded NULs.  STRING_SIZE is the size of the array the string
-     literal is stored in.  */
-  unsigned HOST_WIDE_INT string_length = TREE_STRING_LENGTH (src);
-  unsigned HOST_WIDE_INT string_size = tree_to_uhwi (mem_size);
+  /* ARRAY_SIZE is the byte size of the array the constant sequence
+     is stored in and equal to sizeof A.  INIT_BYTES is the number
+     of bytes in the constant sequence used to initialize the array,
+     including any embedded NULs as well as the terminating NUL (for
+     strings), but not including any trailing zeros/NULs past
+     the terminating one appended implicitly to a string literal to
+     zero out the remainder of the array it's stored in.  For example,
+     given:
+       const char a[7] = "abc\0d";
+       n = strlen (a + 1);
+     ARRAY_SIZE is 7, INIT_BYTES is 6, and OFFSET is 1.  For a valid
+     (i.e., nul-terminated) string with no embedded nuls, INIT_BYTES
+     is equal to strlen (A) + 1.  */
+  const unsigned HOST_WIDE_INT array_size = tree_to_uhwi (mem_size);
+  unsigned HOST_WIDE_INT init_bytes = TREE_STRING_LENGTH (src);
 
   /* Ideally this would turn into a gcc_checking_assert over time.  */
-  if (string_length > string_size)
-    string_length = string_size;
+  if (init_bytes > array_size)
+    init_bytes = array_size;
 
   const char *string = TREE_STRING_POINTER (src);
 
   /* Ideally this would turn into a gcc_checking_assert over time.  */
-  if (string_length > string_size)
-    string_length = string_size;
+  if (init_bytes > array_size)
+    init_bytes = array_size;
 
-  if (string_length == 0
-      || offset >= string_size)
+  if (init_bytes == 0 || offset >= array_size)
     return NULL;
 
-  if (strlen)
+  if (strsize)
     {
-      /* Compute and store the length of the substring at OFFSET.
-	 All offsets past the initial length refer to null strings.  */
-      if (offset < string_length)
-	*strlen = string_length - offset;
+      /* Compute and store the number of characters from the beginning
+	 of the substring at OFFSET to the end, including the terminating
+	 nul.  Offsets past the initial length refer to null strings.  */
+      if (offset < init_bytes)
+	*strsize = init_bytes - offset;
       else
-	*strlen = 1;
+	*strsize = 1;
     }
   else
     {
@@ -15474,11 +15540,11 @@ c_getstr (tree src, unsigned HOST_WIDE_INT *strlen /* = NULL */)
       /* Support only properly NUL-terminated single byte strings.  */
       if (tree_to_uhwi (TYPE_SIZE_UNIT (eltype)) != 1)
 	return NULL;
-      if (string[string_length - 1] != '\0')
+      if (string[init_bytes - 1] != '\0')
 	return NULL;
     }
 
-  return offset < string_length ? string + offset : "";
+  return offset < init_bytes ? string + offset : "";
 }
 
 /* Given a tree T, compute which bits in T may be nonzero.  */

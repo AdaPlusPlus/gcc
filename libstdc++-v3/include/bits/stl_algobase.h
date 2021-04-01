@@ -543,7 +543,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
    *  @param  __first  An input iterator.
    *  @param  __last   An input iterator.
    *  @param  __result An output iterator.
-   *  @return   result + (first - last)
+   *  @return   result + (last - first)
    *
    *  This inline function will boil down to a call to @c memmove whenever
    *  possible.  Failing that, if random access iterators are passed, then the
@@ -576,7 +576,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
    *  @param  __first  An input iterator.
    *  @param  __last   An input iterator.
    *  @param  __result An output iterator.
-   *  @return   result + (first - last)
+   *  @return   result + (last - first)
    *
    *  This inline function will boil down to a call to @c memmove whenever
    *  possible.  Failing that, if random access iterators are passed, then the
@@ -779,7 +779,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
    *  @param  __first  A bidirectional iterator.
    *  @param  __last   A bidirectional iterator.
    *  @param  __result A bidirectional iterator.
-   *  @return   result - (first - last)
+   *  @return   result - (last - first)
    *
    *  The function has the same effect as copy, but starts at the end of the
    *  range and works its way to the start, returning the start of the result.
@@ -815,7 +815,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
    *  @param  __first  A bidirectional iterator.
    *  @param  __last   A bidirectional iterator.
    *  @param  __result A bidirectional iterator.
-   *  @return   result - (first - last)
+   *  @return   result - (last - first)
    *
    *  The function has the same effect as move, but starts at the end of the
    *  range and works its way to the start, returning the start of the result.
@@ -875,11 +875,20 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 
   // Specialization: for char types we can use memset.
   template<typename _Tp>
+    _GLIBCXX20_CONSTEXPR
     inline typename
     __gnu_cxx::__enable_if<__is_byte<_Tp>::__value, void>::__type
     __fill_a1(_Tp* __first, _Tp* __last, const _Tp& __c)
     {
       const _Tp __tmp = __c;
+#if __cpp_lib_is_constant_evaluated
+      if (std::is_constant_evaluated())
+	{
+	  for (; __first != __last; ++__first)
+	    *__first = __tmp;
+	  return;
+	}
+#endif
       if (const size_t __len = __last - __first)
 	__builtin_memset(__first, static_cast<unsigned char>(__tmp), __len);
     }
@@ -975,14 +984,14 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 #endif
 
   inline _GLIBCXX_CONSTEXPR long long
-  __size_to_integer(float __n) { return __n; }
+  __size_to_integer(float __n) { return (long long)__n; }
   inline _GLIBCXX_CONSTEXPR long long
-  __size_to_integer(double __n) { return __n; }
+  __size_to_integer(double __n) { return (long long)__n; }
   inline _GLIBCXX_CONSTEXPR long long
-  __size_to_integer(long double __n) { return __n; }
+  __size_to_integer(long double __n) { return (long long)__n; }
 #if !defined(__STRICT_ANSI__) && defined(_GLIBCXX_USE_FLOAT128)
   inline _GLIBCXX_CONSTEXPR long long
-  __size_to_integer(__float128 __n) { return __n; }
+  __size_to_integer(__float128 __n) { return (long long)__n; }
 #endif
 
   template<typename _OutputIterator, typename _Size, typename _Tp>
@@ -1278,9 +1287,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       typedef typename iterator_traits<_II1>::value_type _ValueType1;
       typedef typename iterator_traits<_II2>::value_type _ValueType2;
       const bool __simple =
-	(__is_byte<_ValueType1>::__value && __is_byte<_ValueType2>::__value
-	 && !__gnu_cxx::__numeric_traits<_ValueType1>::__is_signed
-	 && !__gnu_cxx::__numeric_traits<_ValueType2>::__is_signed
+	(__is_memcmp_ordered_with<_ValueType1, _ValueType2>::__value
 	 && __is_pointer<_II1>::__value
 	 && __is_pointer<_II2>::__value
 #if __cplusplus > 201703L && __cpp_lib_concepts
@@ -1636,8 +1643,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
   // or std::byte, suitable for comparison by memcmp.
   template<typename _Iter>
     concept __is_byte_iter = contiguous_iterator<_Iter>
-      && __is_byte<iter_value_t<_Iter>>::__value != 0
-      && !__gnu_cxx::__numeric_traits<iter_value_t<_Iter>>::__is_signed;
+      && __is_memcmp_ordered<iter_value_t<_Iter>>::__value;
 
   // Return a struct with two members, initialized to the smaller of x and y
   // (or x if they compare equal) and the result of the comparison x <=> y.
@@ -1943,14 +1949,17 @@ _GLIBCXX_END_NAMESPACE_ALGO
 	  if (__pred(__first))
 	    return __first;
 	  ++__first;
+	  // FALLTHRU
 	case 2:
 	  if (__pred(__first))
 	    return __first;
 	  ++__first;
+	  // FALLTHRU
 	case 1:
 	  if (__pred(__first))
 	    return __first;
 	  ++__first;
+	  // FALLTHRU
 	case 0:
 	default:
 	  return __last;

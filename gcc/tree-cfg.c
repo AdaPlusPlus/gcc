@@ -1731,6 +1731,7 @@ group_case_labels_stmt (gswitch *stmt)
   int old_size = gimple_switch_num_labels (stmt);
   int i, next_index, new_size;
   basic_block default_bb = NULL;
+  hash_set<tree> *removed_labels = NULL;
 
   default_bb = gimple_switch_default_bb (cfun, stmt);
 
@@ -1747,8 +1748,11 @@ group_case_labels_stmt (gswitch *stmt)
       base_bb = label_to_block (cfun, CASE_LABEL (base_case));
 
       /* Discard cases that have the same destination as the default case or
-	 whose destiniation blocks have already been removed as unreachable.  */
-      if (base_bb == NULL || base_bb == default_bb)
+	 whose destination blocks have already been removed as unreachable.  */
+      if (base_bb == NULL
+	  || base_bb == default_bb
+	  || (removed_labels
+	      && removed_labels->contains (CASE_LABEL (base_case))))
 	{
 	  i++;
 	  continue;
@@ -1771,10 +1775,13 @@ group_case_labels_stmt (gswitch *stmt)
 	  /* Merge the cases if they jump to the same place,
 	     and their ranges are consecutive.  */
 	  if (merge_bb == base_bb
+	      && (removed_labels == NULL
+		  || !removed_labels->contains (CASE_LABEL (merge_case)))
 	      && wi::to_wide (CASE_LOW (merge_case)) == bhp1)
 	    {
-	      base_high = CASE_HIGH (merge_case) ?
-		  CASE_HIGH (merge_case) : CASE_LOW (merge_case);
+	      base_high
+		= (CASE_HIGH (merge_case)
+		   ? CASE_HIGH (merge_case) : CASE_LOW (merge_case));
 	      CASE_HIGH (base_case) = base_high;
 	      next_index++;
 	    }
@@ -1795,7 +1802,29 @@ group_case_labels_stmt (gswitch *stmt)
 	{
 	  edge base_edge = find_edge (gimple_bb (stmt), base_bb);
 	  if (base_edge != NULL)
-	    remove_edge_and_dominated_blocks (base_edge);
+	    {
+	      for (gimple_stmt_iterator gsi = gsi_start_bb (base_bb);
+		   !gsi_end_p (gsi); gsi_next (&gsi))
+		if (glabel *stmt = dyn_cast <glabel *> (gsi_stmt (gsi)))
+		  {
+		    if (FORCED_LABEL (gimple_label_label (stmt))
+			|| DECL_NONLOCAL (gimple_label_label (stmt)))
+		      {
+			/* Forced/non-local labels aren't going to be removed,
+			   but they will be moved to some neighbouring basic
+			   block. If some later case label refers to one of
+			   those labels, we should throw that case away rather
+			   than keeping it around and refering to some random
+			   other basic block without an edge to it.  */
+			if (removed_labels == NULL)
+			  removed_labels = new hash_set<tree>;
+			removed_labels->add (gimple_label_label (stmt));
+		      }
+		  }
+		else
+		  break;
+	      remove_edge_and_dominated_blocks (base_edge);
+	    }
 	  i = next_index;
 	  continue;
 	}
@@ -1812,6 +1841,7 @@ group_case_labels_stmt (gswitch *stmt)
   if (new_size < old_size)
     gimple_switch_set_num_labels (stmt, new_size);
 
+  delete removed_labels;
   return new_size < old_size;
 }
 
@@ -2103,7 +2133,17 @@ gimple_merge_blocks (basic_block a, basic_block b)
 	  if (FORCED_LABEL (label))
 	    {
 	      gimple_stmt_iterator dest_gsi = gsi_start_bb (a);
-	      gsi_insert_before (&dest_gsi, stmt, GSI_NEW_STMT);
+	      tree first_label = NULL_TREE;
+	      if (!gsi_end_p (dest_gsi))
+		if (glabel *first_label_stmt
+		    = dyn_cast <glabel *> (gsi_stmt (dest_gsi)))
+		  first_label = gimple_label_label (first_label_stmt);
+	      if (first_label
+		  && (DECL_NONLOCAL (first_label)
+		      || EH_LANDING_PAD_NR (first_label) != 0))
+		gsi_insert_after (&dest_gsi, stmt, GSI_NEW_STMT);
+	      else
+		gsi_insert_before (&dest_gsi, stmt, GSI_NEW_STMT);
 	    }
 	  /* Other user labels keep around in a form of a debug stmt.  */
 	  else if (!DECL_ARTIFICIAL (label) && MAY_HAVE_DEBUG_BIND_STMTS)
@@ -3936,7 +3976,7 @@ verify_gimple_assign_binary (gassign *stmt)
 	    /* Because we special-case pointers to void we allow difference
 	       of arbitrary pointers with the same mode.  */
 	    || TYPE_MODE (rhs1_type) != TYPE_MODE (rhs2_type)
-	    || TREE_CODE (lhs_type) != INTEGER_TYPE
+	    || !INTEGRAL_TYPE_P (lhs_type)
 	    || TYPE_UNSIGNED (lhs_type)
 	    || TYPE_PRECISION (lhs_type) != TYPE_PRECISION (rhs1_type))
 	  {
@@ -7205,6 +7245,8 @@ move_block_to_fn (struct function *dest_cfun, basic_block bb,
       free_stmt_operands (cfun, stmt);
       push_cfun (dest_cfun);
       update_stmt (stmt);
+      if (is_gimple_call (stmt))
+	notice_special_calls (as_a <gcall *> (stmt));
       pop_cfun ();
     }
 

@@ -1341,7 +1341,8 @@ place_field (record_layout_info rli, tree field)
 	 Bump the cumulative size to multiple of field alignment.  */
 
       if (!targetm.ms_bitfield_layout_p (rli->t)
-          && DECL_SOURCE_LOCATION (field) != BUILTINS_LOCATION)
+	  && DECL_SOURCE_LOCATION (field) != BUILTINS_LOCATION
+	  && !TYPE_ARTIFICIAL (rli->t))
 	warning (OPT_Wpadded, "padding struct to align %q+D", field);
 
       /* If the alignment is still within offset_align, just align
@@ -1775,7 +1776,8 @@ finalize_record_size (record_layout_info rli)
 
   if (TREE_CONSTANT (unpadded_size)
       && simple_cst_equal (unpadded_size, TYPE_SIZE (rli->t)) == 0
-      && input_location != BUILTINS_LOCATION)
+      && input_location != BUILTINS_LOCATION
+      && !TYPE_ARTIFICIAL (rli->t))
     warning (OPT_Wpadded, "padding struct size to alignment boundary");
 
   if (warn_packed && TREE_CODE (rli->t) == RECORD_TYPE
@@ -2813,6 +2815,8 @@ set_min_and_max_values_for_integral_type (tree type,
      to those types, they don't have any valid value.  */
   if (precision < 1)
     return;
+
+  gcc_assert (precision <= WIDE_INT_MAX_PRECISION);
 
   TYPE_MIN_VALUE (type)
     = wide_int_to_tree (type, wi::min_value (precision, sgn));

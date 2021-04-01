@@ -2644,6 +2644,7 @@ create_component_ref_by_pieces_1 (basic_block block, vn_reference_t ref,
       }
     case STRING_CST:
     case INTEGER_CST:
+    case POLY_INT_CST:
     case COMPLEX_CST:
     case VECTOR_CST:
     case REAL_CST:
@@ -2952,7 +2953,8 @@ create_expression_by_pieces (basic_block block, pre_expr expr,
 	      VN_INFO (forcedname)->value_id = get_next_value_id ();
 	      nameexpr = get_or_alloc_expr_for_name (forcedname);
 	      add_to_value (VN_INFO (forcedname)->value_id, nameexpr);
-	      bitmap_value_replace_in_set (NEW_SETS (block), nameexpr);
+	      if (NEW_SETS (block))
+		bitmap_value_replace_in_set (NEW_SETS (block), nameexpr);
 	      bitmap_value_replace_in_set (AVAIL_OUT (block), nameexpr);
 	    }
 
@@ -3117,8 +3119,8 @@ insert_into_preds_of_block (basic_block block, unsigned int exprnum,
   bitmap_insert_into_set (PHI_GEN (block), newphi);
   bitmap_value_replace_in_set (AVAIL_OUT (block),
 			       newphi);
-  bitmap_insert_into_set (NEW_SETS (block),
-			  newphi);
+  if (NEW_SETS (block))
+    bitmap_insert_into_set (NEW_SETS (block), newphi);
 
   /* If we insert a PHI node for a conversion of another PHI node
      in the same basic-block try to preserve range information.
@@ -3571,6 +3573,16 @@ do_hoist_insertion (basic_block block)
 	  continue;
 	}
 
+      /* If we end up with a punned expression representation and this
+	 happens to be a float typed one give up - we can't know for
+	 sure whether all paths perform the floating-point load we are
+	 about to insert and on some targets this can cause correctness
+	 issues.  See PR88240.  */
+      if (expr->kind == REFERENCE
+	  && PRE_EXPR_REFERENCE (expr)->punned
+	  && FLOAT_TYPE_P (get_expr_type (expr)))
+	continue;
+
       /* OK, we should hoist this value.  Perform the transformation.  */
       pre_stats.hoist_insert++;
       if (dump_file && (dump_flags & TDF_DETAILS))
@@ -3668,10 +3680,6 @@ insert (void)
 		  if (do_partial_partial)
 		    changed |= do_pre_partial_partial_insertion (block, dom);
 		}
-
-	      /* Insert expressions for hoisting.  */
-	      if (flag_code_hoisting && EDGE_COUNT (block->succs) >= 2)
-		changed |= do_hoist_insertion (block);
 	    }
 	}
 
@@ -3684,6 +3692,28 @@ insert (void)
   while (changed);
 
   statistics_histogram_event (cfun, "insert iterations", num_iterations);
+
+  /* AVAIL_OUT is not needed after insertion so we don't have to
+     propagate NEW_SETS from hoist insertion.  */
+  FOR_ALL_BB_FN (bb, cfun)
+    {
+      bitmap_set_pool.remove (NEW_SETS (bb));
+      NEW_SETS (bb) = NULL;
+    }
+
+  /* Insert expressions for hoisting.  Do a backward walk here since
+     inserting into BLOCK exposes new opportunities in its predecessors.
+     Since PRE and hoist insertions can cause back-to-back iteration
+     and we are interested in PRE insertion exposed hoisting opportunities
+     but not in hoisting exposed PRE ones do hoist insertion only after
+     PRE insertion iteration finished and do not iterate it.  */
+  if (flag_code_hoisting)
+    for (int idx = rpo_num - 1; idx >= 0; --idx)
+      {
+	basic_block block = BASIC_BLOCK_FOR_FN (cfun, rpo[idx]);
+	if (EDGE_COUNT (block->succs) >= 2)
+	  changed |= do_hoist_insertion (block);
+      }
 
   free (rpo);
 }

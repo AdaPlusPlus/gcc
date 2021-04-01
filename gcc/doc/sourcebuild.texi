@@ -1244,6 +1244,18 @@ This DejaGnu directive compares @var{regexp} to the combined output
 that the test executable writes to @file{stdout} and @file{stderr}.
 @end table
 
+@subsubsection Specify environment variables for a test
+
+@table @code
+@item @{ dg-set-compiler-env-var @var{var_name} "@var{var_value}" @}
+Specify that the environment variable @var{var_name} needs to be set
+to @var{var_value} before invoking the compiler on the test file.
+
+@item @{ dg-set-target-env-var @var{var_name} "@var{var_value}" @}
+Specify that the environment variable @var{var_name} needs to be set
+to @var{var_value} before execution of the program created by the test.
+@end table
+
 @subsubsection Specify additional files for a test
 
 @table @code
@@ -1829,6 +1841,17 @@ Some multilibs may be incompatible with these options.
 ARM target supports @code{-mfpu=vfp3 -mfloat-abi=softfp}.
 Some multilibs may be incompatible with these options.
 
+@item arm_arch_v8a_hard_ok
+@anchor{arm_arch_v8a_hard_ok}
+The compiler is targeting @code{arm*-*-*} and can compile and assemble code
+using the options @code{-march=armv8-a -mfpu=neon-fp-armv8 -mfloat-abi=hard}.
+This is not enough to guarantee that linking works.
+
+@item arm_arch_v8a_hard_multilib
+The compiler is targeting @code{arm*-*-*} and can build programs using
+the options @code{-march=armv8-a -mfpu=neon-fp-armv8 -mfloat-abi=hard}.
+The target can also run the resulting binaries.
+
 @item arm_v8_vfp_ok
 ARM target supports @code{-mfpu=fp-armv8 -mfloat-abi=softfp}.
 Some multilibs may be incompatible with these options.
@@ -1904,6 +1927,30 @@ ARM target supports options to generate instructions from ARMv8.1-M with
 the M-Profile Vector Extension (MVE). Some multilibs may be incompatible
 with these options.
 
+@item arm_v8_1m_mve_fp_ok
+ARM target supports options to generate instructions from ARMv8.1-M with
+the Half-precision floating-point instructions (HP), Floating-point Extension
+(FP) along with M-Profile Vector Extension (MVE). Some multilibs may be
+incompatible with these options.
+
+@item arm_mve_hw
+Test system supports executing MVE instructions.
+
+@item arm_v8m_main_cde
+ARM target supports options to generate instructions from ARMv8-M with
+the Custom Datapath Extension (CDE). Some multilibs may be incompatible
+with these options.
+
+@item arm_v8m_main_cde_fp
+ARM target supports options to generate instructions from ARMv8-M with
+the Custom Datapath Extension (CDE) and floating-point (VFP).
+Some multilibs may be incompatible with these options.
+
+@item arm_v8_1m_main_cde_mve
+ARM target supports options to generate instructions from ARMv8.1-M with
+the Custom Datapath Extension (CDE) and M-Profile Vector Extension (MVE).
+Some multilibs may be incompatible with these options.
+
 @item arm_prefer_ldrd_strd
 ARM target prefers @code{LDRD} and @code{STRD} instructions over
 @code{LDM} and @code{STM} instructions.
@@ -1956,6 +2003,14 @@ ARM Target supports options suitable for accessing the Q-bit manipulation
 intrinsics from @code{arm_acle.h}.
 Some multilibs may be incompatible with these options.
 
+@item arm_softfp_ok
+@anchor{arm_softfp_ok}
+ARM target supports the @code{-mfloat-abi=softfp} option.
+
+@item arm_hard_ok
+@anchor{arm_hard_ok}
+ARM target supports the @code{-mfloat-abi=hard} option.
+
 @end table
 
 @subsubsection AArch64-specific attributes
@@ -1977,7 +2032,19 @@ AArch64 target which generates instruction sequences for big endian.
 @item aarch64_small_fpic
 Binutils installed on test system supports relocation types required by -fpic
 for AArch64 small memory model.
+@item aarch64_sve_hw
+AArch64 target that is able to generate and execute SVE code (regardless of
+whether it does so by default).
+@item aarch64_sve128_hw
+@itemx aarch64_sve256_hw
+@itemx aarch64_sve512_hw
+@itemx aarch64_sve1024_hw
+@itemx aarch64_sve2048_hw
+Like @code{aarch64_sve_hw}, but also test for an exact hardware vector length.
 
+@item aarch64_fjcvtzs_hw
+AArch64 target that is able to generate and execute armv8.3-a FJCVTZS
+instruction.
 @end table
 
 @subsubsection MIPS-specific attributes
@@ -2183,6 +2250,9 @@ overloads for @code{strchr} etc. functions.
 @item d_runtime
 Target provides the D runtime.
 
+@item d_runtime_has_std_library
+Target provides the D standard library (Phobos).
+
 @item dummy_wcsftime
 Target uses a dummy @code{wcsftime} function that always returns zero.
 
@@ -2197,6 +2267,12 @@ Target provides @file{fenv.h} include file.
 @item fenv_exceptions
 Target supports @file{fenv.h} with all the standard IEEE exceptions
 and floating-point exceptions are raised by arithmetic operations.
+
+@item fileio
+Target offers such file I/O library functions as @code{fopen},
+@code{fclose}, @code{tmpnam}, and @code{remove}.  This is a link-time
+requirement for the presence of the functions in the library; even if
+they fail at runtime, the requirement is still regarded as satisfied.
 
 @item freestanding
 Target is @samp{freestanding} as defined in section 4 of the C99 standard.
@@ -2551,6 +2627,11 @@ the @ref{arm_neon_fp16_ok,,arm_neon_fp16_ok effective target keyword}.
 arm vfp3 floating point support; see
 the @ref{arm_vfp3_ok,,arm_vfp3_ok effective target keyword}.
 
+@item arm_arch_v8a_hard
+Add options for ARMv8-A and the hard-float variant of the AAPCS,
+if this is supported by the compiler; see the
+@ref{arm_arch_v8a_hard_ok,,arm_arch_v8a_hard_ok} effective target keyword.
+
 @item arm_v8_1a_neon
 Add options for ARMv8.1-A with Adv.SIMD support, if this is supported
 by the target; see the @ref{arm_v8_1a_neon_ok,,arm_v8_1a_neon_ok}
@@ -2739,17 +2820,19 @@ assembly output.
 Passes if @var{symbol} is not defined as a hidden symbol in the test's
 assembly output.
 
-@item check-function-bodies @var{prefix} @var{terminator} [@var{option} [@{ target/xfail @var{selector} @}]]
+@item check-function-bodies @var{prefix} @var{terminator} [@var{options} [@{ target/xfail @var{selector} @}]]
 Looks through the source file for comments that give the expected assembly
 output for selected functions.  Each line of expected output starts with the
 prefix string @var{prefix} and the expected output for a function as a whole
 is followed by a line that starts with the string @var{terminator}.
 Specifying an empty terminator is equivalent to specifying @samp{"*/"}.
 
-If @var{option} is specified, the test only applies to command lines
-that contain @var{option}.  This can be useful if a source file is compiled
-both with and without optimization, since it is rarely useful to check the
-assembly output for unoptimized code.
+@var{options}, if specified, is a list of regular expressions, each of
+which matches a full command-line option.  A non-empty list prevents
+the test from running unless all of the given options are present on the
+command line.  This can help if a source file is compiled both with
+and without optimization, since it is rarely useful to check the full
+function body for unoptimized code.
 
 The first line of the expected output for a function @var{fn} has the form:
 

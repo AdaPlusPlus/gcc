@@ -448,6 +448,8 @@ rs6000_target_modify_macros (bool define_p, HOST_WIDE_INT flags,
     rs6000_define_or_undefine_macro (define_p, "_ARCH_PWR8");
   if ((flags & OPTION_MASK_MODULO) != 0)
     rs6000_define_or_undefine_macro (define_p, "_ARCH_PWR9");
+  if ((flags & OPTION_MASK_POWER10) != 0)
+    rs6000_define_or_undefine_macro (define_p, "_ARCH_PWR10");
   if ((flags & OPTION_MASK_SOFT_FLOAT) != 0)
     rs6000_define_or_undefine_macro (define_p, "_SOFT_FLOAT");
   if ((flags & OPTION_MASK_RECIP_PRECISION) != 0)
@@ -481,6 +483,8 @@ rs6000_target_modify_macros (bool define_p, HOST_WIDE_INT flags,
 	  /* Define this when supporting context-sensitive keywords.  */
       if (!flag_iso)
 	rs6000_define_or_undefine_macro (define_p, "__APPLE_ALTIVEC__");
+      if (rs6000_aix_extabi)
+	rs6000_define_or_undefine_macro (define_p, "__EXTABI__");
     }
   /* Note that the OPTION_MASK_VSX flag is automatically turned on in
      the following conditions:
@@ -591,6 +595,13 @@ rs6000_target_modify_macros (bool define_p, HOST_WIDE_INT flags,
      PROCESSOR_CELL) (e.g. -mcpu=cell).  */
   if ((bu_mask & RS6000_BTM_CELL) != 0)
     rs6000_define_or_undefine_macro (define_p, "__PPU__");
+
+  /* Tell the user if we support the MMA instructions.  */
+  if ((flags & OPTION_MASK_MMA) != 0)
+    rs6000_define_or_undefine_macro (define_p, "__MMA__");
+  /* Whether pc-relative code is being generated.  */
+  if ((flags & OPTION_MASK_PCREL) != 0)
+    rs6000_define_or_undefine_macro (define_p, "__PCREL__");
 }
 
 void

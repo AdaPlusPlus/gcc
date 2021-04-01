@@ -601,6 +601,10 @@ Wframe-larger-than=
 Common RejectNegative Joined Host_Wide_Int ByteSize Warning Var(warn_frame_larger_than_size) Init(HOST_WIDE_INT_MAX)
 -Wframe-larger-than=<byte-size>	Warn if a function's stack frame requires in excess of <byte-size>.
 
+Wno-frame-larger-than
+Common Alias(Wframe-larger-than=,18446744073709551615EiB,none) Warning
+Disable -Wframe-larger-than= warning.  Equivalent to -Wframe-larger-than=<SIZE_MAX> or larger.
+
 Wfree-nonheap-object
 Common Var(warn_free_nonheap_object) Init(1) Warning
 Warn when attempting to free a non-heap object.
@@ -630,6 +634,10 @@ Common RejectNegative Joined Warning Undocumented Alias(Wlarger-than=)
 Wlarger-than=
 Common RejectNegative Joined Host_Wide_Int ByteSize Warning Var(warn_larger_than_size) Init(HOST_WIDE_INT_MAX)
 -Wlarger-than=<byte-size>	Warn if an object's size exceeds <byte-size>.
+
+Wno-larger-than
+Common Alias(Wlarger-than=,18446744073709551615EiB,none) Warning
+Disable -Wlarger-than= warning.  Equivalent to -Wlarger-than=<SIZE_MAX> or larger.
 
 Wnonnull-compare
 Var(warn_nonnull_compare) Warning
@@ -703,6 +711,10 @@ Warn when not issuing stack smashing protection for some reason.
 Wstack-usage=
 Common Joined RejectNegative Host_Wide_Int ByteSize Var(warn_stack_usage) Warning Init(HOST_WIDE_INT_MAX)
 -Wstack-usage=<byte-size>	Warn if stack usage might exceed <byte-size>.
+
+Wno-stack-usage
+Common Alias(Wstack-usage=,18446744073709551615EiB,none) Warning
+Disable Wstack-usage= warning.  Equivalent to Wstack-usage=<SIZE_MAX> or larger.
 
 Wstrict-aliasing
 Common Warning
@@ -1731,7 +1743,7 @@ Common RejectNegative Alias(fcf-protection=,full)
 
 fcf-protection=
 Common Report Joined RejectNegative Enum(cf_protection_level) Var(flag_cf_protection) Init(CF_NONE)
--fcf-protection=[full|branch|return|none]	Instrument functions with checks to verify jump/call/return control-flow transfer
+-fcf-protection=[full|branch|return|none|check]	Instrument functions with checks to verify jump/call/return control-flow transfer
 instructions have valid targets.
 
 Enum
@@ -1745,6 +1757,9 @@ Enum(cf_protection_level) String(branch) Value(CF_BRANCH)
 
 EnumValue
 Enum(cf_protection_level) String(return) Value(CF_RETURN)
+
+EnumValue
+Enum(cf_protection_level) String(check) Value(CF_CHECK)
 
 EnumValue
 Enum(cf_protection_level) String(none) Value(CF_NONE)
@@ -2180,7 +2195,7 @@ Enum(profile_reproducibility) String(parallel-runs) Value(PROFILE_REPRODUCIBILIT
 EnumValue
 Enum(profile_reproducibility) String(multithreaded) Value(PROFILE_REPRODUCIBILITY_MULTITHREADED)
 
-fprofile-reproducible
+fprofile-reproducible=
 Common Joined RejectNegative Var(flag_profile_reproducible) Enum(profile_reproducibility) Init(PROFILE_REPRODUCIBILITY_SERIAL)
 -fprofile-reproducible=[serial|parallel-runs|multithreaded]	Control level of reproducibility of profile gathered by -fprofile-generate.
 
@@ -2195,6 +2210,10 @@ Enum(profile_update) String(atomic) Value(PROFILE_UPDATE_ATOMIC)
 
 EnumValue
 Enum(profile_update) String(prefer-atomic) Value(PROFILE_UPDATE_PREFER_ATOMIC)
+
+fprofile-prefix-path=
+Common Joined RejectNegative Var(profile_prefix_path)
+Remove prefix from absolute path before mangling name for -fprofile-generate= and -fprofile-use=.
 
 fprofile-generate
 Common
@@ -2834,6 +2853,10 @@ Perform loop unrolling when iteration count is known.
 funroll-all-loops
 Common Report Var(flag_unroll_all_loops) Optimization
 Perform loop unrolling for all loops.
+
+funroll-completely-grow-size
+Undocumented Var(flag_cunroll_grow_size) Optimization
+; Internal undocumented flag, allow size growth during complete unrolling
 
 ; Nonzero means that loop optimizer may assume that the induction variables
 ; that control loops do not overflow and that the loops with nontrivial

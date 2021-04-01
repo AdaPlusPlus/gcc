@@ -31,6 +31,18 @@
 	      || REGNO_REG_CLASS (REGNO (op)) != NO_REGS));
 })
 
+(define_predicate "mve_memory_operand"
+  (and (match_code "mem")
+       (match_test "TARGET_32BIT
+		    && mve_vector_mem_operand (GET_MODE (op), XEXP (op, 0),
+					       false)")))
+
+(define_predicate "mve_scatter_memory"
+  (and (match_code "mem")
+       (match_test "TARGET_HAVE_MVE && REG_P (XEXP (op, 0))
+		    && mve_vector_mem_operand (GET_MODE (op), XEXP (op, 0),
+					       false)")))
+
 ;; True for immediates in the range of 1 to 16 for MVE.
 (define_predicate "mve_imm_16"
   (match_test "satisfies_constraint_Rd (op)"))
@@ -143,6 +155,18 @@
 	      || REGNO (op) >= FIRST_PSEUDO_REGISTER));
 })
 
+;; Low core register, or any pseudo.
+(define_predicate "arm_low_register_operand"
+  (match_code "reg,subreg")
+{
+  if (GET_CODE (op) == SUBREG)
+    op = SUBREG_REG (op);
+
+  return (REG_P (op)
+	  && (REGNO (op) <= LAST_LO_REGNUM
+	      || REGNO (op) >= FIRST_PSEUDO_REGISTER));
+})
+
 (define_predicate "arm_general_adddi_operand"
   (ior (match_operand 0 "arm_general_register_operand")
        (and (match_code "const_int")
@@ -225,6 +249,47 @@
 (define_predicate "const_int_M_operand"
   (and (match_operand 0 "const_int_operand")
        (match_test "satisfies_constraint_M (op)")))
+
+(define_predicate "const_int_coproc_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_CDE_CONST_COPROC)")
+       (match_test "arm_arch_cde_coproc_bits[UINTVAL (op)] & arm_arch_cde_coproc")))
+
+(define_predicate "const_int_ccde1_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_CCDE_CONST_1)")))
+
+(define_predicate "const_int_ccde2_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_CCDE_CONST_2)")))
+
+(define_predicate "const_int_ccde3_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_CCDE_CONST_3)")))
+
+(define_predicate "const_int_vcde1_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_VCDE_CONST_1)")))
+
+(define_predicate "const_int_vcde2_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_VCDE_CONST_2)")))
+
+(define_predicate "const_int_vcde3_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_VCDE_CONST_3)")))
+
+(define_predicate "const_int_mve_cde1_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_MVE_CDE_CONST_1)")))
+
+(define_predicate "const_int_mve_cde2_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_MVE_CDE_CONST_2)")))
+
+(define_predicate "const_int_mve_cde3_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "IN_RANGE (UINTVAL (op), 0, ARM_MVE_CDE_CONST_3)")))
 
 ;; This doesn't have to do much because the constant is already checked
 ;; in the shift_operator predicate.

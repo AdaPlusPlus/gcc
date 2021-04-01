@@ -1,4 +1,4 @@
-// { dg-do run }
+// { dg-do run { target c++17 } }
 //
 // Check if default return_void is insert at correct position.
 #include <cassert>
@@ -28,7 +28,7 @@ public:
   using coro_handle = std::coroutine_handle<promise_type>;
   auto get_return_object() { return coro_handle::from_promise(*this); }
   auto initial_suspend() { return std::suspend_always(); }
-  auto final_suspend() { return std::suspend_always(); }
+  auto final_suspend() noexcept { return std::suspend_always(); }
   void return_void() { value_ = -1; }
   void unhandled_exception() {}
 private:

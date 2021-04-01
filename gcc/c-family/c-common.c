@@ -568,14 +568,15 @@ const struct c_common_resword c_common_reswords[] =
   { "oneway",		RID_ONEWAY,		D_OBJC },
   { "out",		RID_OUT,		D_OBJC },
   /* These are recognized inside a property attribute list */
-  { "assign",	        RID_ASSIGN,		D_OBJC }, 
-  { "copy",	        RID_COPY,		D_OBJC }, 
-  { "getter",		RID_GETTER,		D_OBJC }, 
-  { "nonatomic",	RID_NONATOMIC,		D_OBJC }, 
-  { "readonly",		RID_READONLY,		D_OBJC }, 
-  { "readwrite",	RID_READWRITE,		D_OBJC }, 
-  { "retain",	        RID_RETAIN,		D_OBJC }, 
-  { "setter",		RID_SETTER,		D_OBJC }, 
+  { "assign",		RID_ASSIGN,		D_OBJC },
+  { "atomic",		RID_PROPATOMIC,		D_OBJC },
+  { "copy",		RID_COPY,		D_OBJC },
+  { "getter",		RID_GETTER,		D_OBJC },
+  { "nonatomic",	RID_NONATOMIC,		D_OBJC },
+  { "readonly",		RID_READONLY,		D_OBJC },
+  { "readwrite",	RID_READWRITE,		D_OBJC },
+  { "retain",		RID_RETAIN,		D_OBJC },
+  { "setter",		RID_SETTER,		D_OBJC },
 };
 
 const unsigned int num_c_common_reswords =
@@ -2041,7 +2042,7 @@ verify_tree (tree x, struct tlist **pbefore_sp, struct tlist **pno_sp,
 /* Try to warn for undefined behavior in EXPR due to missing sequence
    points.  */
 
-DEBUG_FUNCTION void
+void
 verify_sequence_points (tree expr)
 {
   struct tlist *before_sp = 0, *after_sp = 0;
@@ -3141,7 +3142,7 @@ pointer_int_sum (location_t loc, enum tree_code resultcode,
       /* If the constant is unsigned, and smaller than the pointer size,
 	 then we must skip this optimization.  This is because it could cause
 	 an overflow error if the constant is negative but INTOP is not.  */
-      && (!TYPE_UNSIGNED (TREE_TYPE (intop))
+      && (TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (intop))
 	  || (TYPE_PRECISION (TREE_TYPE (intop))
 	      == TYPE_PRECISION (TREE_TYPE (ptrop)))))
     {
@@ -4513,7 +4514,7 @@ build_va_arg (location_t loc, tree expr, tree type)
       if (canon_va_type == NULL_TREE)
 	error_at (loc, "first argument to %<va_arg%> not of type %<va_list%>");
 
-      /* Let's handle things neutrallly, if expr:
+      /* Let's handle things neutrally, if expr:
 	 - has undeclared type, or
 	 - is not an va_list type.  */
       return build_va_arg_1 (loc, type, error_mark_node);
@@ -4525,7 +4526,7 @@ build_va_arg (location_t loc, tree expr, tree type)
 
       /* Take the address, to get '&ap'.  Note that &ap is not a va_list
 	 type.  */
-      mark_addressable (expr);
+      c_common_mark_addressable_vec (expr);
       expr = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (expr)), expr);
 
       return build_va_arg_1 (loc, type, expr);
@@ -4587,7 +4588,7 @@ build_va_arg (location_t loc, tree expr, tree type)
 
       /* Take the address, to get '&ap'.  Make sure it's a pointer to array
 	 elem type.  */
-      mark_addressable (expr);
+      c_common_mark_addressable_vec (expr);
       expr = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (canon_va_type)),
 		     expr);
 
@@ -6716,6 +6717,8 @@ speculation_safe_value_resolve_params (location_t loc, tree orig_function,
       tree val2 = (*params)[1];
       if (TREE_CODE (TREE_TYPE (val2)) == ARRAY_TYPE)
 	val2 = default_conversion (val2);
+      if (error_operand_p (val2))
+	return false;
       if (!(TREE_TYPE (val) == TREE_TYPE (val2)
 	    || useless_type_conversion_p (TREE_TYPE (val), TREE_TYPE (val2))))
 	{
@@ -6946,8 +6949,15 @@ get_atomic_generic_size (location_t loc, tree function,
       return 0;
     }
 
+  if (!COMPLETE_TYPE_P (TREE_TYPE (type_0)))
+    {
+      error_at (loc, "argument 1 of %qE must be a pointer to a complete type",
+		function);
+      return 0;
+    }
+
   /* Types must be compile time constant sizes. */
-  if (TREE_CODE ((TYPE_SIZE_UNIT (TREE_TYPE (type_0)))) != INTEGER_CST)
+  if (!tree_fits_uhwi_p ((TYPE_SIZE_UNIT (TREE_TYPE (type_0)))))
     {
       error_at (loc, 
 		"argument 1 of %qE must be a pointer to a constant size type",
@@ -7400,11 +7410,13 @@ resolve_overloaded_builtin (location_t loc, tree function,
       {
 	tree new_function, first_param, result;
 	enum built_in_function fncode
-	  = speculation_safe_value_resolve_call (function, params);;
+	  = speculation_safe_value_resolve_call (function, params);
+
+	if (fncode == BUILT_IN_NONE)
+	  return error_mark_node;
 
 	first_param = (*params)[0];
-	if (fncode == BUILT_IN_NONE
-	    || !speculation_safe_value_resolve_params (loc, function, params))
+	if (!speculation_safe_value_resolve_params (loc, function, params))
 	  return error_mark_node;
 
 	if (targetm.have_speculation_safe_value (true))

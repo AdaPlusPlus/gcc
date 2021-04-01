@@ -16,6 +16,7 @@
 // <http://www.gnu.org/licenses/>.
 
 // { dg-do compile { target c++14 } }
+// { dg-require-gthreads "" }
 
 #include <experimental/executor>
 
@@ -34,3 +35,6 @@ void test01(net::execution_context& c)
 {
   net::make_service<S>(c);
 }
+
+static_assert(std::is_default_constructible<net::service_already_exists>(),
+	      "LWG 3414. service_already_exists has no usable constructors");

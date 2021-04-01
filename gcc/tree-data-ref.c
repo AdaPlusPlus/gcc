@@ -141,7 +141,7 @@ tree_fold_divides_p (const_tree a, const_tree b)
 /* Returns true iff A divides B.  */
 
 static inline bool
-int_divides_p (int a, int b)
+int_divides_p (lambda_int a, lambda_int b)
 {
   return ((b % a) == 0);
 }
@@ -4019,10 +4019,10 @@ lambda_matrix_right_hermite (lambda_matrix A, int m, int n,
 
 		  a = S[i-1][j];
 		  b = S[i][j];
-		  sigma = (a * b < 0) ? -1: 1;
-		  a = abs_hwi (a);
-		  b = abs_hwi (b);
-		  factor = sigma * (a / b);
+		  sigma = ((a < 0) ^ (b < 0)) ? -1: 1;
+		  unsigned HOST_WIDE_INT abs_a = absu_hwi (a);
+		  unsigned HOST_WIDE_INT abs_b = absu_hwi (b);
+		  factor = sigma * (lambda_int)(abs_a / abs_b);
 
 		  lambda_matrix_row_add (S, n, i, i-1, -factor);
 		  std::swap (S[i], S[i-1]);
@@ -4048,7 +4048,7 @@ analyze_subscript_affine_affine (tree chrec_a,
 				 tree *last_conflicts)
 {
   unsigned nb_vars_a, nb_vars_b, dim;
-  HOST_WIDE_INT gamma, gcd_alpha_beta;
+  lambda_int gamma, gcd_alpha_beta;
   lambda_matrix A, U, S;
   struct obstack scratch_obstack;
 
@@ -4821,17 +4821,19 @@ build_classic_dist_vector_1 (struct data_dependence_relation *ddr,
   return true;
 }
 
-/* Return true when the DDR contains only constant access functions.  */
+/* Return true when the DDR contains only invariant access functions wrto. loop
+   number LNUM.  */
 
 static bool
-constant_access_functions (const struct data_dependence_relation *ddr)
+invariant_access_functions (const struct data_dependence_relation *ddr,
+			    int lnum)
 {
   unsigned i;
   subscript *sub;
 
   FOR_EACH_VEC_ELT (DDR_SUBSCRIPTS (ddr), i, sub)
-    if (!evolution_function_is_constant_p (SUB_ACCESS_FN (sub, 0))
-	|| !evolution_function_is_constant_p (SUB_ACCESS_FN (sub, 1)))
+    if (!evolution_function_is_invariant_p (SUB_ACCESS_FN (sub, 0), lnum)
+	|| !evolution_function_is_invariant_p (SUB_ACCESS_FN (sub, 1), lnum))
       return false;
 
   return true;
@@ -5030,7 +5032,7 @@ build_classic_dist_vector (struct data_dependence_relation *ddr,
       dist_v = lambda_vector_new (DDR_NB_LOOPS (ddr));
       save_dist_v (ddr, dist_v);
 
-      if (constant_access_functions (ddr))
+      if (invariant_access_functions (ddr, loop_nest->num))
 	add_distance_for_zero_overlaps (ddr);
 
       if (DDR_NB_LOOPS (ddr) > 1)

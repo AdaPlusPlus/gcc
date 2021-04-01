@@ -1,6 +1,6 @@
 /* { dg-require-effective-target arm_v8_1m_mve_ok } */
+/* { dg-add-options arm_v8_1m_mve } */
 /* { dg-skip-if "Incompatible float ABI" { *-*-* } { "-mfloat-abi=soft" } {""} } */
-/* { dg-additional-options "-march=armv8.1-m.main+mve -mfloat-abi=hard -mthumb --save-temps" } */
 
 #include "arm_mve.h"
 
@@ -11,20 +11,12 @@ foo8 ()
   return b;
 }
 
-/* { dg-final { scan-assembler "vmov\\tq\[0-7\], q\[0-7\]"  }  } */
-/* { dg-final { scan-assembler "vstrb.*" }  } */
-/* { dg-final { scan-assembler "vldr.64.*" }  } */
-
 int16x8_t
 foo16 (int16x8_t value)
 {
   int16x8_t b = {1, 2, 3};
   return b;
 }
-
-/* { dg-final { scan-assembler "vmov\\tq\[0-7\], q\[0-7\]"  }  } */
-/* { dg-final { scan-assembler "vstrb.*" }  } */
-/* { dg-final { scan-assembler "vldr.64.*" }  } */
 
 int32x4_t
 foo32 (int32x4_t value)
@@ -33,17 +25,9 @@ foo32 (int32x4_t value)
   return b;
 }
 
-/* { dg-final { scan-assembler "vmov\\tq\[0-7\], q\[0-7\]"  }  } */
-/* { dg-final { scan-assembler "vstrb.*" }  } */
-/* { dg-final { scan-assembler "vldr.64.*" }  } */
-
 int64x2_t
 foo64 (int64x2_t value)
 {
   int64x2_t b = {1};
   return b;
 }
-
-/* { dg-final { scan-assembler "vmov\\tq\[0-7\], q\[0-7\]"  }  } */
-/* { dg-final { scan-assembler "vstrb.*" }  } */
-/* { dg-final { scan-assembler "vldr.64.*" }  } */

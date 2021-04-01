@@ -37,6 +37,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-eh.h"
 #include "builtins.h"
 #include "cfgloop.h"
+#include "attribs.h"
 
 #include "ipa-icf-gimple.h"
 
@@ -570,6 +571,9 @@ func_checker::compare_gimple_call (gcall *s1, gcall *s2)
       || (fntype1 && !types_compatible_p (fntype1, fntype2)))
     return return_false_with_msg ("call function types are not compatible");
 
+  if (fntype1 && fntype2 && comp_type_attributes (fntype1, fntype2) != 1)
+    return return_false_with_msg ("different fntype attributes");
+
   tree chain1 = gimple_call_chain (s1);
   tree chain2 = gimple_call_chain (s2);
   if ((chain1 && !chain2)
@@ -590,6 +594,14 @@ func_checker::compare_gimple_call (gcall *s1, gcall *s2)
   /* Return value checking.  */
   t1 = gimple_get_lhs (s1);
   t2 = gimple_get_lhs (s2);
+
+  /* For internal calls, lhs types need to be verified, as neither fntype nor
+     callee comparisons can catch that.  */
+  if (gimple_call_internal_p (s1)
+      && t1
+      && t2
+      && !compatible_types_p (TREE_TYPE (t1), TREE_TYPE (t2)))
+    return return_false_with_msg ("GIMPLE internal call LHS type mismatch");
 
   return compare_operand (t1, t2);
 }

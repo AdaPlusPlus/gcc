@@ -4969,12 +4969,12 @@ ix86_get_ssemov (rtx *operands, unsigned size,
       && !TARGET_AVX512VL
       && GET_MODE_SIZE (mode) < 64)
     {
-      /* NB: Since ix86_hard_regno_mode_ok only allows xmm16-xmm31 or
-	 ymm16-ymm31 in 128/256 bit modes when AVX512VL is enabled,
-	 we get here only for xmm16-xmm31 or ymm16-ymm31 in 32/64 bit
+      /* NB: Even though ix86_hard_regno_mode_ok doesn't allow
+	 xmm16-xmm31 nor ymm16-ymm31 in 128/256 bit modes when
+	 AVX512VL is disabled, LRA can still generate reg to
+	 reg moves with xmm16-xmm31 and ymm16-ymm31 in 128/256 bit
 	 modes.  */
-      if (GET_MODE_SIZE (mode) >= 16
-	  || memory_operand (operands[0], mode)
+      if (memory_operand (operands[0], mode)
 	  || memory_operand (operands[1], mode))
 	gcc_unreachable ();
       size = 64;
@@ -6190,11 +6190,6 @@ ix86_compute_frame_layout (void)
   offset += frame->nregs * UNITS_PER_WORD;
   frame->reg_save_offset = offset;
 
-  /* On SEH target, registers are pushed just before the frame pointer
-     location.  */
-  if (TARGET_SEH)
-    frame->hard_frame_pointer_offset = offset;
-
   /* Calculate the size of the va-arg area (not including padding, if any).  */
   frame->va_arg_size = ix86_varargs_gpr_size + ix86_varargs_fpr_size;
 
@@ -6357,14 +6352,22 @@ ix86_compute_frame_layout (void)
      the unwind data structure.  */
   if (TARGET_SEH)
     {
-      HOST_WIDE_INT diff;
+      /* Force the frame pointer to point at or below the lowest register save
+	 area, see the SEH code in config/i386/winnt.c for the rationale.  */
+      frame->hard_frame_pointer_offset = frame->sse_reg_save_offset;
 
-      /* If we can leave the frame pointer where it is, do so.  Also, returns
-	 the establisher frame for __builtin_frame_address (0).  */
-      diff = frame->stack_pointer_offset - frame->hard_frame_pointer_offset;
-      if (diff <= SEH_MAX_FRAME_SIZE
-	  && (diff > 240 || (diff & 15) != 0)
-	  && !crtl->accesses_prior_frames)
+      /* If we can leave the frame pointer where it is, do so.  Also, return
+	 the establisher frame for __builtin_frame_address (0) or else if the
+	 frame overflows the SEH maximum frame size.  */
+      const HOST_WIDE_INT diff
+	= frame->stack_pointer_offset - frame->hard_frame_pointer_offset;
+      if (diff <= 255)
+	{
+	  /* The resulting diff will be a multiple of 16 lower than 255,
+	     i.e. at most 240 as required by the unwind data structure.  */
+	  frame->hard_frame_pointer_offset += (diff & 15);
+	}
+      else if (diff <= SEH_MAX_FRAME_SIZE && !crtl->accesses_prior_frames)
 	{
 	  /* Ideally we'd determine what portion of the local stack frame
 	     (within the constraint of the lowest 240) is most heavily used.
@@ -6373,6 +6376,8 @@ ix86_compute_frame_layout (void)
 	     frame that is addressable with 8-bit offsets.  */
 	  frame->hard_frame_pointer_offset = frame->stack_pointer_offset - 128;
 	}
+      else
+	frame->hard_frame_pointer_offset = frame->hfp_save_offset;
     }
 }
 
@@ -6965,10 +6970,12 @@ ix86_update_stack_boundary (void)
 static rtx
 ix86_get_drap_rtx (void)
 {
-  /* We must use DRAP if there are outgoing arguments on stack and
+  /* We must use DRAP if there are outgoing arguments on stack or
+     the stack pointer register is clobbered by asm statment and
      ACCUMULATE_OUTGOING_ARGS is false.  */
   if (ix86_force_drap
-      || (cfun->machine->outgoing_args_on_stack
+      || ((cfun->machine->outgoing_args_on_stack
+	   || crtl->sp_is_clobbered_by_asm)
 	  && !ACCUMULATE_OUTGOING_ARGS))
     crtl->need_drap = true;
 
@@ -8168,17 +8175,6 @@ ix86_expand_prologue (void)
       insn = emit_insn (gen_push (hard_frame_pointer_rtx));
       RTX_FRAME_RELATED_P (insn) = 1;
 
-      /* Push registers now, before setting the frame pointer
-	 on SEH target.  */
-      if (!int_registers_saved
-	  && TARGET_SEH
-	  && !frame.save_regs_using_mov)
-	{
-	  ix86_emit_save_regs ();
-	  int_registers_saved = true;
-	  gcc_assert (m->fs.sp_offset == frame.reg_save_offset);
-	}
-
       if (m->fs.sp_offset == frame.hard_frame_pointer_offset)
 	{
 	  insn = emit_move_insn (hard_frame_pointer_rtx, stack_pointer_rtx);
@@ -9052,8 +9048,13 @@ ix86_expand_epilogue (int style)
 	      t = plus_constant (Pmode, t, m->fs.fp_offset - UNITS_PER_WORD);
 	      emit_insn (gen_rtx_SET (sa, t));
 
-	      t = gen_frame_mem (Pmode, hard_frame_pointer_rtx);
-	      insn = emit_move_insn (hard_frame_pointer_rtx, t);
+	      /* NB: eh_return epilogues must restore the frame pointer
+		 in word_mode since the upper 32 bits of RBP register
+		 can have any values.  */
+	      t = gen_frame_mem (word_mode, hard_frame_pointer_rtx);
+	      rtx frame_reg = gen_rtx_REG (word_mode,
+					   HARD_FRAME_POINTER_REGNUM);
+	      insn = emit_move_insn (frame_reg, t);
 
 	      /* Note that we use SA as a temporary CFA, as the return
 		 address is at the proper place relative to it.  We
@@ -9068,7 +9069,7 @@ ix86_expand_epilogue (int style)
 	      add_reg_note (insn, REG_CFA_DEF_CFA,
 			    plus_constant (Pmode, sa, UNITS_PER_WORD));
 	      ix86_add_queued_cfa_restore_notes (insn);
-	      add_reg_note (insn, REG_CFA_RESTORE, hard_frame_pointer_rtx);
+	      add_reg_note (insn, REG_CFA_RESTORE, frame_reg);
 	      RTX_FRAME_RELATED_P (insn) = 1;
 
 	      m->fs.cfa_reg = sa;
@@ -12730,40 +12731,6 @@ ix86_print_operand (FILE *file, rtx x, int code)
 	    {
 	      ix86_print_operand (file, x, 0);
 	      fputs (", ", file);
-	    }
-	  return;
-
-	case 'I':
-	  if (ASSEMBLER_DIALECT == ASM_ATT)
-	    putc ('$', file);
-	  switch (GET_CODE (x))
-	    {
-	    case EQ:
-	      putc ('0', file);
-	      break;
-	    case NE:
-	      putc ('4', file);
-	      break;
-	    case GE:
-	    case GEU:
-	      putc ('5', file);
-	      break;
-	    case GT:
-	    case GTU:
-	      putc ('6', file);
-	      break;
-	    case LE:
-	    case LEU:
-	      putc ('2', file);
-	      break;
-	    case LT:
-	    case LTU:
-	      putc ('1', file);
-	      break;
-	    default:
-	      output_operand_lossage ("operand is not a condition code, "
-				      "invalid operand code 'I'");
-	      return;
 	    }
 	  return;
 
@@ -21142,40 +21109,18 @@ ix86_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &/*inputs*/,
 	  continue;
 	}
 
-      if (dest_mode == DImode && !TARGET_64BIT)
-	dest_mode = SImode;
-
-      if (dest_mode != QImode)
-	{
-	  rtx destqi = gen_reg_rtx (QImode);
-	  emit_insn (gen_rtx_SET (destqi, x));
-
-	  if (TARGET_ZERO_EXTEND_WITH_AND
-	      && optimize_function_for_speed_p (cfun))
-	    {
-	      x = force_reg (dest_mode, const0_rtx);
-
-	      emit_insn (gen_movstrictqi (gen_lowpart (QImode, x), destqi));
-	    }
-	  else
-	    {
-	      x = gen_rtx_ZERO_EXTEND (dest_mode, destqi);
-	      if (dest_mode == GET_MODE (dest)
-		  && !register_operand (dest, GET_MODE (dest)))
-		x = force_reg (dest_mode, x);
-	    }
-	}
-
-      if (dest_mode != GET_MODE (dest))
-	{
-	  rtx tmp = gen_reg_rtx (SImode);
-
-	  emit_insn (gen_rtx_SET (tmp, x));
-	  emit_insn (gen_zero_extendsidi2 (dest, tmp));
-	}
-      else
+      if (dest_mode == QImode)
 	emit_insn (gen_rtx_SET (dest, x));
+      else
+	{
+	  rtx reg = gen_reg_rtx (QImode);
+	  emit_insn (gen_rtx_SET (reg, x));
+
+	  reg = convert_to_mode (dest_mode, reg, 1);
+	  emit_move_insn (dest, reg);
+	}
     }
+
   rtx_insn *seq = get_insns ();
   end_sequence ();
 
@@ -21632,8 +21577,9 @@ ix86_reassociation_width (unsigned int op, machine_mode mode)
 
       /* Integer vector instructions execute in FP unit
 	 and can execute 3 additions and one multiplication per cycle.  */
-      if ((ix86_tune == PROCESSOR_ZNVER1 || ix86_tune == PROCESSOR_ZNVER2)
-	   && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
+      if ((ix86_tune == PROCESSOR_ZNVER1 || ix86_tune == PROCESSOR_ZNVER2
+	   || ix86_tune == PROCESSOR_ZNVER3)
+   	  && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
 	return 1;
 
       /* Account for targets that splits wide vectors into multiple parts.  */
@@ -21771,7 +21717,9 @@ ix86_get_mask_mode (machine_mode data_mode)
   if ((TARGET_AVX512F && vector_size == 64)
       || (TARGET_AVX512VL && (vector_size == 32 || vector_size == 16)))
     {
-      if (elem_size == 4 || elem_size == 8 || TARGET_AVX512BW)
+      if (elem_size == 4
+	  || elem_size == 8
+	  || (TARGET_AVX512BW && (elem_size == 1 || elem_size == 2)))
 	return smallest_int_mode_for_size (nunits);
     }
 
@@ -22383,11 +22331,12 @@ ix86_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
       *clear = build_call_expr (fnclex, 0);
       tree sw_var = create_tmp_var_raw (short_unsigned_type_node);
       tree fnstsw_call = build_call_expr (fnstsw, 0);
-      tree sw_mod = build2 (MODIFY_EXPR, short_unsigned_type_node,
-			    sw_var, fnstsw_call);
+      tree sw_mod = build4 (TARGET_EXPR, short_unsigned_type_node, sw_var,
+			    fnstsw_call, NULL_TREE, NULL_TREE);
       tree exceptions_x87 = fold_convert (integer_type_node, sw_var);
-      tree update_mod = build2 (MODIFY_EXPR, integer_type_node,
-				exceptions_var, exceptions_x87);
+      tree update_mod = build4 (TARGET_EXPR, integer_type_node,
+				exceptions_var, exceptions_x87,
+				NULL_TREE, NULL_TREE);
       *update = build2 (COMPOUND_EXPR, integer_type_node,
 			sw_mod, update_mod);
       tree update_fldenv = build_call_expr (fldenv, 1, fenv_addr);
@@ -22400,15 +22349,17 @@ ix86_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
       tree stmxcsr = get_ix86_builtin (IX86_BUILTIN_STMXCSR);
       tree ldmxcsr = get_ix86_builtin (IX86_BUILTIN_LDMXCSR);
       tree stmxcsr_hold_call = build_call_expr (stmxcsr, 0);
-      tree hold_assign_orig = build2 (MODIFY_EXPR, unsigned_type_node,
-				      mxcsr_orig_var, stmxcsr_hold_call);
+      tree hold_assign_orig = build4 (TARGET_EXPR, unsigned_type_node,
+				      mxcsr_orig_var, stmxcsr_hold_call,
+				      NULL_TREE, NULL_TREE);
       tree hold_mod_val = build2 (BIT_IOR_EXPR, unsigned_type_node,
 				  mxcsr_orig_var,
 				  build_int_cst (unsigned_type_node, 0x1f80));
       hold_mod_val = build2 (BIT_AND_EXPR, unsigned_type_node, hold_mod_val,
 			     build_int_cst (unsigned_type_node, 0xffffffc0));
-      tree hold_assign_mod = build2 (MODIFY_EXPR, unsigned_type_node,
-				     mxcsr_mod_var, hold_mod_val);
+      tree hold_assign_mod = build4 (TARGET_EXPR, unsigned_type_node,
+				     mxcsr_mod_var, hold_mod_val,
+				     NULL_TREE, NULL_TREE);
       tree ldmxcsr_hold_call = build_call_expr (ldmxcsr, 1, mxcsr_mod_var);
       tree hold_all = build2 (COMPOUND_EXPR, unsigned_type_node,
 			      hold_assign_orig, hold_assign_mod);
@@ -22437,8 +22388,8 @@ ix86_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
 			    exceptions_assign);
 	}
       else
-	*update = build2 (MODIFY_EXPR, integer_type_node,
-			  exceptions_var, exceptions_sse);
+	*update = build4 (TARGET_EXPR, integer_type_node, exceptions_var,
+			  exceptions_sse, NULL_TREE, NULL_TREE);
       tree ldmxcsr_update_call = build_call_expr (ldmxcsr, 1, mxcsr_orig_var);
       *update = build2 (COMPOUND_EXPR, void_type_node, *update,
 			ldmxcsr_update_call);
@@ -22648,7 +22599,7 @@ ix86_init_libfuncs (void)
    apparently at random.  */
 
 static enum flt_eval_method
-ix86_excess_precision (enum excess_precision_type type)
+ix86_get_excess_precision (enum excess_precision_type type)
 {
   switch (type)
     {
@@ -23170,7 +23121,7 @@ ix86_run_selftests (void)
 #define TARGET_MD_ASM_ADJUST ix86_md_asm_adjust
 
 #undef TARGET_C_EXCESS_PRECISION
-#define TARGET_C_EXCESS_PRECISION ix86_excess_precision
+#define TARGET_C_EXCESS_PRECISION ix86_get_excess_precision
 #undef TARGET_PROMOTE_PROTOTYPES
 #define TARGET_PROMOTE_PROTOTYPES hook_bool_const_tree_true
 #undef TARGET_SETUP_INCOMING_VARARGS

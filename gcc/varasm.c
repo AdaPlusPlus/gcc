@@ -276,10 +276,12 @@ get_noswitch_section (unsigned int flags, noswitch_section_callback callback)
 }
 
 /* Return the named section structure associated with NAME.  Create
-   a new section with the given fields if no such structure exists.  */
+   a new section with the given fields if no such structure exists.
+   When NOT_EXISTING, then fail if the section already exists.  */
 
 section *
-get_section (const char *name, unsigned int flags, tree decl)
+get_section (const char *name, unsigned int flags, tree decl,
+	     bool not_existing)
 {
   section *sect, **slot;
 
@@ -296,6 +298,9 @@ get_section (const char *name, unsigned int flags, tree decl)
     }
   else
     {
+      if (not_existing)
+	internal_error ("Section already exists: %qs", name);
+
       sect = *slot;
       /* It is fine if one of the sections has SECTION_NOTYPE as long as
          the other has none of the contrary flags (see the logic at the end
@@ -3425,7 +3430,6 @@ build_constant_desc (tree exp)
   TREE_CONSTANT_POOL_ADDRESS_P (symbol) = 1;
 
   rtl = gen_const_mem (TYPE_MODE (TREE_TYPE (exp)), symbol);
-  set_mem_attributes (rtl, exp, 1);
   set_mem_alias_set (rtl, 0);
 
   /* Putting EXP into the literal pool might have imposed a different
@@ -5686,7 +5690,12 @@ merge_weak (tree newdecl, tree olddecl)
 void
 declare_weak (tree decl)
 {
-  gcc_assert (TREE_CODE (decl) != FUNCTION_DECL || !TREE_ASM_WRITTEN (decl));
+  /* With -fsyntax-only, TREE_ASM_WRITTEN might be set on certain function
+     decls earlier than normally, but as with -fsyntax-only nothing is really
+     emitted, there is no harm in marking it weak later.  */
+  gcc_assert (TREE_CODE (decl) != FUNCTION_DECL
+	      || !TREE_ASM_WRITTEN (decl)
+	      || flag_syntax_only);
   if (! TREE_PUBLIC (decl))
     {
       error ("weak declaration of %q+D must be public", decl);

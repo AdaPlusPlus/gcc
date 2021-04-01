@@ -2730,15 +2730,15 @@ gimple_builtin_call_types_compatible_p (const gimple *stmt, tree fndecl)
   return true;
 }
 
-/* Return true when STMT is operator delete call.  */
+/* Return true when STMT is operator a replaceable delete call.  */
 
 bool
-gimple_call_operator_delete_p (const gcall *stmt)
+gimple_call_replaceable_operator_delete_p (const gcall *stmt)
 {
   tree fndecl;
 
   if ((fndecl = gimple_call_fndecl (stmt)) != NULL_TREE)
-    return DECL_IS_OPERATOR_DELETE_P (fndecl);
+    return DECL_IS_REPLACEABLE_OPERATOR_DELETE_P (fndecl);
   return false;
 }
 
@@ -2932,8 +2932,8 @@ check_loadstore (gimple *, tree op, tree, void *data)
 bool
 infer_nonnull_range (gimple *stmt, tree op)
 {
-  return infer_nonnull_range_by_dereference (stmt, op)
-    || infer_nonnull_range_by_attribute (stmt, op);
+  return (infer_nonnull_range_by_dereference (stmt, op)
+	  || infer_nonnull_range_by_attribute (stmt, op));
 }
 
 /* Return true if OP can be inferred to be non-NULL after STMT
@@ -2945,7 +2945,8 @@ infer_nonnull_range_by_dereference (gimple *stmt, tree op)
      non-NULL if -fdelete-null-pointer-checks is enabled.  */
   if (!flag_delete_null_pointer_checks
       || !POINTER_TYPE_P (TREE_TYPE (op))
-      || gimple_code (stmt) == GIMPLE_ASM)
+      || gimple_code (stmt) == GIMPLE_ASM
+      || gimple_clobber_p (stmt))
     return false;
 
   if (walk_stmt_load_store_ops (stmt, (void *)op,

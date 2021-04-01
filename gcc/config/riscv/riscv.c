@@ -333,6 +333,14 @@ static const struct attribute_spec riscv_attribute_table[] =
   { NULL,	0,  0, false, false, false, false, NULL, NULL }
 };
 
+/* Order for the CLOBBERs/USEs of gpr_save.  */
+static const unsigned gpr_save_reg_order[] = {
+  INVALID_REGNUM, T0_REGNUM, T1_REGNUM, RETURN_ADDR_REGNUM,
+  S0_REGNUM, S1_REGNUM, S2_REGNUM, S3_REGNUM, S4_REGNUM,
+  S5_REGNUM, S6_REGNUM, S7_REGNUM, S8_REGNUM, S9_REGNUM,
+  S10_REGNUM, S11_REGNUM
+};
+
 /* A table describing all the processors GCC knows about.  */
 static const struct riscv_cpu_info riscv_cpu_info_table[] = {
   { "rocket", generic, &rocket_tune_info },
@@ -3020,7 +3028,7 @@ riscv_legitimize_call_address (rtx addr)
 {
   if (!call_insn_operand (addr, VOIDmode))
     {
-      rtx reg = RISCV_PROLOGUE_TEMP (Pmode);
+      rtx reg = RISCV_CALL_ADDRESS_TEMP (Pmode);
       riscv_emit_move (reg, addr);
       return reg;
     }
@@ -3031,9 +3039,9 @@ riscv_legitimize_call_address (rtx addr)
    Assume that the areas do not overlap.  */
 
 static void
-riscv_block_move_straight (rtx dest, rtx src, HOST_WIDE_INT length)
+riscv_block_move_straight (rtx dest, rtx src, unsigned HOST_WIDE_INT length)
 {
-  HOST_WIDE_INT offset, delta;
+  unsigned HOST_WIDE_INT offset, delta;
   unsigned HOST_WIDE_INT bits;
   int i;
   enum machine_mode mode;
@@ -3079,8 +3087,8 @@ riscv_block_move_straight (rtx dest, rtx src, HOST_WIDE_INT length)
    register.  Store them in *LOOP_REG and *LOOP_MEM respectively.  */
 
 static void
-riscv_adjust_block_mem (rtx mem, HOST_WIDE_INT length,
-		       rtx *loop_reg, rtx *loop_mem)
+riscv_adjust_block_mem (rtx mem, unsigned HOST_WIDE_INT length,
+			rtx *loop_reg, rtx *loop_mem)
 {
   *loop_reg = copy_addr_to_reg (XEXP (mem, 0));
 
@@ -3095,11 +3103,11 @@ riscv_adjust_block_mem (rtx mem, HOST_WIDE_INT length,
    the memory regions do not overlap.  */
 
 static void
-riscv_block_move_loop (rtx dest, rtx src, HOST_WIDE_INT length,
-		      HOST_WIDE_INT bytes_per_iter)
+riscv_block_move_loop (rtx dest, rtx src, unsigned HOST_WIDE_INT length,
+		       unsigned HOST_WIDE_INT bytes_per_iter)
 {
   rtx label, src_reg, dest_reg, final_src, test;
-  HOST_WIDE_INT leftover;
+  unsigned HOST_WIDE_INT leftover;
 
   leftover = length % bytes_per_iter;
   length -= leftover;
@@ -3146,16 +3154,17 @@ riscv_expand_block_move (rtx dest, rtx src, rtx length)
 {
   if (CONST_INT_P (length))
     {
-      HOST_WIDE_INT factor, align;
+      unsigned HOST_WIDE_INT hwi_length = UINTVAL (length);
+      unsigned HOST_WIDE_INT factor, align;
 
       align = MIN (MIN (MEM_ALIGN (src), MEM_ALIGN (dest)), BITS_PER_WORD);
       factor = BITS_PER_WORD / align;
 
       if (optimize_function_for_size_p (cfun)
-	  && INTVAL (length) * factor * UNITS_PER_WORD > MOVE_RATIO (false))
+	  && hwi_length * factor * UNITS_PER_WORD > MOVE_RATIO (false))
 	return false;
 
-      if (INTVAL (length) <= RISCV_MAX_MOVE_BYTES_STRAIGHT / factor)
+      if (hwi_length <= (RISCV_MAX_MOVE_BYTES_STRAIGHT / factor))
 	{
 	  riscv_block_move_straight (dest, src, INTVAL (length));
 	  return true;
@@ -3165,7 +3174,8 @@ riscv_expand_block_move (rtx dest, rtx src, rtx length)
 	  unsigned min_iter_words
 	    = RISCV_MAX_MOVE_BYTES_PER_LOOP_ITER / UNITS_PER_WORD;
 	  unsigned iter_words = min_iter_words;
-	  HOST_WIDE_INT bytes = INTVAL (length), words = bytes / UNITS_PER_WORD;
+	  unsigned HOST_WIDE_INT bytes = hwi_length;
+	  unsigned HOST_WIDE_INT words = bytes / UNITS_PER_WORD;
 
 	  /* Lengthen the loop body if it shortens the tail.  */
 	  for (unsigned i = min_iter_words; i < min_iter_words * 2 - 1; i++)
@@ -3415,6 +3425,43 @@ riscv_select_section (tree decl, int reloc,
     }
 }
 
+/* Switch to the appropriate section for output of DECL.  */
+
+static void
+riscv_unique_section (tree decl, int reloc)
+{
+  const char *prefix = NULL;
+  bool one_only = DECL_ONE_ONLY (decl) && !HAVE_COMDAT_GROUP;
+
+  switch (categorize_decl_for_section (decl, reloc))
+    {
+    case SECCAT_SRODATA:
+      prefix = one_only ? ".sr" : ".srodata";
+      break;
+
+    default:
+      break;
+    }
+  if (prefix)
+    {
+      const char *name, *linkonce;
+      char *string;
+
+      name = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (decl));
+      name = targetm.strip_name_encoding (name);
+
+      /* If we're using one_only, then there needs to be a .gnu.linkonce
+	 prefix to the section name.  */
+      linkonce = one_only ? ".gnu.linkonce" : "";
+
+      string = ACONCAT ((linkonce, prefix, ".", name, NULL));
+
+      set_decl_section_name (decl, string);
+      return;
+    }
+  default_unique_section (decl, reloc);
+}
+
 /* Return a section for X, handling small data. */
 
 static section *
@@ -3580,18 +3627,18 @@ riscv_compute_frame_info (void)
 {
   struct riscv_frame_info *frame;
   HOST_WIDE_INT offset;
-  bool interrupt_save_t1 = false;
+  bool interrupt_save_prologue_temp = false;
   unsigned int regno, i, num_x_saved = 0, num_f_saved = 0;
 
   frame = &cfun->machine->frame;
 
   /* In an interrupt function, if we have a large frame, then we need to
-     save/restore t1.  We check for this before clearing the frame struct.  */
+     save/restore t0.  We check for this before clearing the frame struct.  */
   if (cfun->machine->interrupt_handler_p)
     {
       HOST_WIDE_INT step1 = riscv_first_stack_step (frame);
       if (! SMALL_OPERAND (frame->total_size - step1))
-	interrupt_save_t1 = true;
+	interrupt_save_prologue_temp = true;
     }
 
   memset (frame, 0, sizeof (*frame));
@@ -3601,7 +3648,8 @@ riscv_compute_frame_info (void)
       /* Find out which GPRs we need to save.  */
       for (regno = GP_REG_FIRST; regno <= GP_REG_LAST; regno++)
 	if (riscv_save_reg_p (regno)
-	    || (interrupt_save_t1 && (regno == T1_REGNUM)))
+	    || (interrupt_save_prologue_temp
+		&& (regno == RISCV_PROLOGUE_TEMP_REGNUM)))
 	  frame->mask |= 1 << (regno - GP_REG_FIRST), num_x_saved++;
 
       /* If this function calls eh_return, we must also save and restore the
@@ -3829,20 +3877,6 @@ riscv_restore_reg (rtx reg, rtx mem)
   RTX_FRAME_RELATED_P (insn) = 1;
 }
 
-/* Return the code to invoke the GPR save routine.  */
-
-const char *
-riscv_output_gpr_save (unsigned mask)
-{
-  static char s[32];
-  unsigned n = riscv_save_libcall_count (mask);
-
-  ssize_t bytes = snprintf (s, sizeof (s), "call\tt0,__riscv_save_%u", n);
-  gcc_assert ((size_t) bytes < sizeof (s));
-
-  return s;
-}
-
 /* For stack frames that can't be allocated with a single ADDI instruction,
    compute the best value to initially allocate.  It must at a minimum
    allocate enough space to spill the callee-saved registers.  If TARGET_RVC,
@@ -3955,9 +3989,9 @@ riscv_expand_prologue (void)
       rtx dwarf = NULL_RTX;
       dwarf = riscv_adjust_libcall_cfi_prologue ();
 
-      frame->mask = 0; /* Temporarily fib that we need not save GPRs.  */
       size -= frame->save_libcall_adjustment;
-      insn = emit_insn (gen_gpr_save (GEN_INT (mask)));
+      insn = emit_insn (riscv_gen_gpr_save_insn (frame));
+      frame->mask = 0; /* Temporarily fib that we need not save GPRs.  */
 
       RTX_FRAME_RELATED_P (insn) = 1;
       REG_NOTES (insn) = dwarf;
@@ -4739,9 +4773,9 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
 
       rtx target_function = force_reg (Pmode, XEXP (DECL_RTL (fndecl), 0));
       /* lui     t2, hi(chain)
-	 lui     t1, hi(func)
+	 lui     t0, hi(func)
 	 addi    t2, t2, lo(chain)
-	 jr      r1, lo(func)
+	 jr      t0, lo(func)
       */
       unsigned HOST_WIDE_INT lui_hi_chain_code, lui_hi_func_code;
       unsigned HOST_WIDE_INT lo_chain_code, lo_func_code;
@@ -4766,7 +4800,7 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       mem = adjust_address (m_tramp, SImode, 0);
       riscv_emit_move (mem, lui_hi_chain);
 
-      /* Gen lui t1, hi(func).  */
+      /* Gen lui t0, hi(func).  */
       rtx hi_func = riscv_force_binary (SImode, PLUS, target_function,
 					fixup_value);
       hi_func = riscv_force_binary (SImode, AND, hi_func,
@@ -4793,7 +4827,7 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       mem = adjust_address (m_tramp, SImode, 2 * GET_MODE_SIZE (SImode));
       riscv_emit_move (mem, addi_lo_chain);
 
-      /* Gen jr r1, lo(func).  */
+      /* Gen jr t0, lo(func).  */
       rtx lo_func = riscv_force_binary (SImode, AND, target_function,
 					imm12_mask);
       lo_func = riscv_force_binary (SImode, ASHIFT, lo_func, GEN_INT (20));
@@ -4812,9 +4846,9 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       target_function_offset = static_chain_offset + GET_MODE_SIZE (ptr_mode);
 
       /* auipc   t2, 0
-	 l[wd]   t1, target_function_offset(t2)
+	 l[wd]   t0, target_function_offset(t2)
 	 l[wd]   t2, static_chain_offset(t2)
-	 jr      t1
+	 jr      t0
       */
       trampoline[0] = OPCODE_AUIPC | (STATIC_CHAIN_REGNUM << SHIFT_RD);
       trampoline[1] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
@@ -5049,6 +5083,81 @@ riscv_hard_regno_rename_ok (unsigned from_regno ATTRIBUTE_UNUSED,
   return !cfun->machine->interrupt_handler_p || df_regs_ever_live_p (to_regno);
 }
 
+
+/* Helper function for generating gpr_save pattern.  */
+
+rtx
+riscv_gen_gpr_save_insn (struct riscv_frame_info *frame)
+{
+  unsigned count = riscv_save_libcall_count (frame->mask);
+  /* 1 for unspec 2 for clobber t0/t1 and 1 for ra.  */
+  unsigned veclen = 1 + 2 + 1 + count;
+  rtvec vec = rtvec_alloc (veclen);
+
+  gcc_assert (veclen <= ARRAY_SIZE (gpr_save_reg_order));
+
+  RTVEC_ELT (vec, 0) =
+    gen_rtx_UNSPEC_VOLATILE (VOIDmode,
+      gen_rtvec (1, GEN_INT (count)), UNSPECV_GPR_SAVE);
+
+  for (unsigned i = 1; i < veclen; ++i)
+    {
+      unsigned regno = gpr_save_reg_order[i];
+      rtx reg = gen_rtx_REG (Pmode, regno);
+      rtx elt;
+
+      /* t0 and t1 are CLOBBERs, others are USEs.  */
+      if (i < 3)
+	elt = gen_rtx_CLOBBER (Pmode, reg);
+      else
+	elt = gen_rtx_USE (Pmode, reg);
+
+      RTVEC_ELT (vec, i) = elt;
+    }
+
+  /* Largest number of caller-save register must set in mask if we are
+     not using __riscv_save_0.  */
+  gcc_assert ((count == 0) ||
+	      BITSET_P (frame->mask, gpr_save_reg_order[veclen - 1]));
+
+  return gen_rtx_PARALLEL (VOIDmode, vec);
+}
+
+/* Return true if it's valid gpr_save pattern.  */
+
+bool
+riscv_gpr_save_operation_p (rtx op)
+{
+  unsigned len = XVECLEN (op, 0);
+
+  if (len > ARRAY_SIZE (gpr_save_reg_order))
+    return false;
+
+  for (unsigned i = 0; i < len; i++)
+    {
+      rtx elt = XVECEXP (op, 0, i);
+      if (i == 0)
+	{
+	  /* First element in parallel is unspec.  */
+	  if (GET_CODE (elt) != UNSPEC_VOLATILE
+	      || GET_CODE (XVECEXP (elt, 0, 0)) != CONST_INT
+	      || XINT (elt, 1) != UNSPECV_GPR_SAVE)
+	    return false;
+	}
+      else
+	{
+	  /* Two CLOBBER and USEs, must check the order.  */
+	  unsigned expect_code = i < 3 ? CLOBBER : USE;
+	  if (GET_CODE (elt) != expect_code
+	      || !REG_P (XEXP (elt, 1))
+	      || (REGNO (XEXP (elt, 1)) != gpr_save_reg_order[i]))
+	    return false;
+	}
+	break;
+    }
+  return true;
+}
+
 /* Initialize the GCC target structure.  */
 #undef TARGET_ASM_ALIGNED_HI_OP
 #define TARGET_ASM_ALIGNED_HI_OP "\t.half\t"
@@ -5162,6 +5271,9 @@ riscv_hard_regno_rename_ok (unsigned from_regno ATTRIBUTE_UNUSED,
 
 #undef TARGET_ASM_SELECT_SECTION
 #define TARGET_ASM_SELECT_SECTION riscv_select_section
+
+#undef TARGET_ASM_UNIQUE_SECTION
+#define TARGET_ASM_UNIQUE_SECTION riscv_unique_section
 
 #undef TARGET_ASM_SELECT_RTX_SECTION
 #define TARGET_ASM_SELECT_RTX_SECTION  riscv_elf_select_rtx_section

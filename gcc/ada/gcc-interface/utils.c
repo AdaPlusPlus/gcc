@@ -424,6 +424,11 @@ make_dummy_type (Entity_Id gnat_type)
     = create_type_stub_decl (TYPE_NAME (gnu_type), gnu_type);
   if (Is_By_Reference_Type (gnat_equiv))
     TYPE_BY_REFERENCE_P (gnu_type) = 1;
+  if (Has_Discriminants (gnat_equiv))
+    decl_attributes (&gnu_type,
+		     tree_cons (get_identifier ("may_alias"), NULL_TREE,
+				NULL_TREE),
+		     ATTR_FLAG_TYPE_IN_PLACE);
 
   SET_DUMMY_NODE (gnat_equiv, gnu_type);
 
@@ -473,10 +478,10 @@ build_dummy_unc_pointer_types (Entity_Id gnat_desig_type, tree gnu_desig_type)
     = create_type_stub_decl (create_concat_name (gnat_desig_type, "XUP"),
 			     gnu_fat_type);
   fields = create_field_decl (get_identifier ("P_ARRAY"), gnu_ptr_array,
-			      gnu_fat_type, NULL_TREE, NULL_TREE, 0, 0);
+			      gnu_fat_type, NULL_TREE, NULL_TREE, 0, 1);
   DECL_CHAIN (fields)
     = create_field_decl (get_identifier ("P_BOUNDS"), gnu_ptr_template,
-			 gnu_fat_type, NULL_TREE, NULL_TREE, 0, 0);
+			 gnu_fat_type, NULL_TREE, NULL_TREE, 0, 1);
   finish_fat_pointer_type (gnu_fat_type, fields);
   SET_TYPE_UNCONSTRAINED_ARRAY (gnu_fat_type, gnu_desig_type);
   /* Suppress debug info until after the type is completed.  */
@@ -1467,7 +1472,7 @@ maybe_pad_type (tree type, tree size, unsigned int align,
     {
       tree packable_type = make_packable_type (type, true, align);
       if (TYPE_MODE (packable_type) != BLKmode
-	  && align >= TYPE_ALIGN (packable_type))
+	  && compare_tree_int (TYPE_SIZE (packable_type), align) <= 0)
         type = packable_type;
     }
 
@@ -1941,7 +1946,6 @@ finish_record_type (tree record_type, tree field_list, int rep_level,
 	this_ada_size = this_size;
 
       const bool variant_part = (TREE_CODE (type) == QUAL_UNION_TYPE);
-      const bool variant_part_at_zero = variant_part && integer_zerop (pos);
 
       /* Clear DECL_BIT_FIELD for the cases layout_decl does not handle.  */
       if (DECL_BIT_FIELD (field)
@@ -1984,7 +1988,7 @@ finish_record_type (tree record_type, tree field_list, int rep_level,
       /* Clear DECL_BIT_FIELD_TYPE for a variant part at offset 0, it's simply
 	 not supported by the DECL_BIT_FIELD_REPRESENTATIVE machinery because
 	 the variant part is always the last field in the list.  */
-      if (variant_part_at_zero)
+      if (variant_part && integer_zerop (pos))
 	DECL_BIT_FIELD_TYPE (field) = NULL_TREE;
 
       /* If we still have DECL_BIT_FIELD set at this point, we know that the
@@ -2019,18 +2023,20 @@ finish_record_type (tree record_type, tree field_list, int rep_level,
 	case RECORD_TYPE:
 	  /* Since we know here that all fields are sorted in order of
 	     increasing bit position, the size of the record is one
-	     higher than the ending bit of the last field processed,
-	     unless we have a variant part at offset 0, since in this
-	     case we might have a field outside the variant part that
-	     has a higher ending position; so use a MAX in this case.
-	     Also, if this field is a QUAL_UNION_TYPE, we need to take
-	     into account the previous size in the case of empty variants.  */
+	     higher than the ending bit of the last field processed
+	     unless we have a rep clause, because we might be processing
+	     the REP part of a record with a variant part for which the
+	     variant part has a rep clause but not the fixed part, in
+	     which case this REP part may contain overlapping fields
+	     and thus needs to be treated like a union tyoe above, so
+	     use a MAX in that case.  Also, if this field is a variant
+	     part, we need to take into account the previous size in
+	     the case of empty variants.  */
 	  ada_size
-	    = merge_sizes (ada_size, pos, this_ada_size, variant_part,
-			   variant_part_at_zero);
+	    = merge_sizes (ada_size, pos, this_ada_size, rep_level > 0,
+			   variant_part);
 	  size
-	    = merge_sizes (size, pos, this_size, variant_part,
-			   variant_part_at_zero);
+	    = merge_sizes (size, pos, this_size, rep_level > 0, variant_part);
 	  break;
 
 	default:
@@ -2322,14 +2328,14 @@ rest_of_record_type_compilation (tree record_type)
 }
 
 /* Utility function of above to merge LAST_SIZE, the previous size of a record
-   with FIRST_BIT and SIZE that describe a field.  SPECIAL is true if this
-   represents a QUAL_UNION_TYPE in which case we must look for COND_EXPRs and
-   replace a value of zero with the old size.  If MAX is true, we take the
+   with FIRST_BIT and SIZE that describe a field.  If MAX is true, we take the
    MAX of the end position of this field with LAST_SIZE.  In all other cases,
-   we use FIRST_BIT plus SIZE.  Return an expression for the size.  */
+   we use FIRST_BIT plus SIZE.  SPECIAL is true if it's for a QUAL_UNION_TYPE,
+   in which case we must look for COND_EXPRs and replace a value of zero with
+   the old size.  Return an expression for the size.  */
 
 static tree
-merge_sizes (tree last_size, tree first_bit, tree size, bool special, bool max)
+merge_sizes (tree last_size, tree first_bit, tree size, bool max, bool special)
 {
   tree type = TREE_TYPE (last_size);
   tree new_size;
@@ -2346,11 +2352,11 @@ merge_sizes (tree last_size, tree first_bit, tree size, bool special, bool max)
 			    integer_zerop (TREE_OPERAND (size, 1))
 			    ? last_size : merge_sizes (last_size, first_bit,
 						       TREE_OPERAND (size, 1),
-						       1, max),
+						       max, special),
 			    integer_zerop (TREE_OPERAND (size, 2))
 			    ? last_size : merge_sizes (last_size, first_bit,
 						       TREE_OPERAND (size, 2),
-						       1, max));
+						       max, special));
 
   /* We don't need any NON_VALUE_EXPRs and they can confuse us (especially
      when fed through SUBSTITUTE_IN_EXPR) into thinking that a constant
@@ -2812,6 +2818,31 @@ aggregate_type_contains_array_p (tree type, bool self_referential)
     }
 }
 
+/* Return true if TYPE is a type with variable size or a padding type with a
+   field of variable size or a record that has a field with such a type.  */
+
+static bool
+type_has_variable_size (tree type)
+{
+  tree field;
+
+  if (!TREE_CONSTANT (TYPE_SIZE (type)))
+    return true;
+
+  if (TYPE_IS_PADDING_P (type)
+      && !TREE_CONSTANT (DECL_SIZE (TYPE_FIELDS (type))))
+    return true;
+
+  if (!RECORD_OR_UNION_TYPE_P (type))
+    return false;
+
+  for (field = TYPE_FIELDS (type); field; field = DECL_CHAIN (field))
+    if (type_has_variable_size (TREE_TYPE (field)))
+      return true;
+
+  return false;
+}
+
 /* Return a FIELD_DECL node.  NAME is the field's name, TYPE is its type and
    RECORD_TYPE is the type of the enclosing record.  If SIZE is nonzero, it
    is the specified size of the field.  If POS is nonzero, it is the bit
@@ -2881,13 +2912,15 @@ create_field_decl (tree name, tree type, tree record_type, tree size, tree pos,
 
   DECL_PACKED (field_decl) = pos ? DECL_BIT_FIELD (field_decl) : packed;
 
-  /* If FIELD_TYPE is BLKmode, we must ensure this is aligned to at least a
-     byte boundary since GCC cannot handle less-aligned BLKmode bitfields.
+  /* If FIELD_TYPE has BLKmode, we must ensure this is aligned to at least
+     a byte boundary since GCC cannot handle less aligned BLKmode bitfields.
+     Likewise if it has a variable size and no specified position because
+     variable-sized objects need to be aligned to at least a byte boundary.
      Likewise for an aggregate without specified position that contains an
-     array, because in this case slices of variable length of this array
-     must be handled by GCC and variable-sized objects need to be aligned
-     to at least a byte boundary.  */
+     array because, in this case, slices of variable length of this array
+     must be handled by GCC and have variable size.  */
   if (packed && (TYPE_MODE (type) == BLKmode
+		 || (!pos && type_has_variable_size (type))
 		 || (!pos
 		     && AGGREGATE_TYPE_P (type)
 		     && aggregate_type_contains_array_p (type, false))))
@@ -3389,6 +3422,12 @@ create_subprog_decl (tree name, tree asm_name, tree type, tree param_decl_list,
 void
 finish_subprog_decl (tree decl, tree asm_name, tree type)
 {
+  /* DECL_ARGUMENTS is set by the caller, but not its context.  */
+  for (tree param_decl = DECL_ARGUMENTS (decl);
+       param_decl;
+       param_decl = DECL_CHAIN (param_decl))
+    DECL_CONTEXT (param_decl) = decl;
+
   tree result_decl
     = build_decl (DECL_SOURCE_LOCATION (decl), RESULT_DECL, NULL_TREE,
 		  TREE_TYPE (type));
@@ -3434,8 +3473,6 @@ finish_subprog_decl (tree decl, tree asm_name, tree type)
 void
 begin_subprog_body (tree subprog_decl)
 {
-  tree param_decl;
-
   announce_function (subprog_decl);
 
   /* This function is being defined.  */
@@ -3451,10 +3488,6 @@ begin_subprog_body (tree subprog_decl)
   /* Enter a new binding level and show that all the parameters belong to
      this function.  */
   gnat_pushlevel ();
-
-  for (param_decl = DECL_ARGUMENTS (subprog_decl); param_decl;
-       param_decl = DECL_CHAIN (param_decl))
-    DECL_CONTEXT (param_decl) = subprog_decl;
 }
 
 /* Finish translating the current subprogram and set its BODY.  */
@@ -5713,7 +5746,7 @@ can_materialize_object_renaming_p (Node_Id expr)
     {
       expr = Original_Node (expr);
 
-      switch Nkind (expr)
+      switch (Nkind (expr))
 	{
 	case N_Identifier:
 	case N_Expanded_Name:
@@ -5777,7 +5810,7 @@ gnat_write_global_declarations (void)
       struct varpool_node *node;
       char *label;
 
-      ASM_FORMAT_PRIVATE_NAME (label, first_global_object_name, 0);
+      ASM_FORMAT_PRIVATE_NAME (label, first_global_object_name, ULONG_MAX);
       dummy_global
 	= build_decl (BUILTINS_LOCATION, VAR_DECL, get_identifier (label),
 		      void_type_node);

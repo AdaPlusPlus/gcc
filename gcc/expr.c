@@ -3692,6 +3692,11 @@ emit_move_multi_word (machine_mode mode, rtx x, rtx y)
   need_clobber = false;
   for (i = 0; i < CEIL (mode_size, UNITS_PER_WORD); i++)
     {
+      /* Do not generate code for a move if it would go entirely
+	 to the non-existing bits of a paradoxical subreg.  */
+      if (undefined_operand_subword_p (x, i))
+	continue;
+
       rtx xpart = operand_subword (x, i, 1, mode);
       rtx ypart;
 
@@ -5083,6 +5088,8 @@ expand_assignment (tree to, tree from, bool nontemporal)
       rtx reg, mem;
 
       reg = expand_expr (from, NULL_RTX, VOIDmode, EXPAND_NORMAL);
+      /* Handle PARALLEL.  */
+      reg = maybe_emit_group_store (reg, TREE_TYPE (from));
       reg = force_not_mem (reg);
       mem = expand_expr (to, NULL_RTX, VOIDmode, EXPAND_WRITE);
       if (TREE_CODE (to) == MEM_REF && REF_REVERSE_STORAGE_ORDER (to))
@@ -8263,7 +8270,12 @@ expand_constructor (tree exp, rtx target, enum expand_modifier modifier,
   /* Handle calls that pass values in multiple non-contiguous
      locations.  The Irix 6 ABI has examples of this.  */
   if (target == 0 || ! safe_from_p (target, exp, 1)
-      || GET_CODE (target) == PARALLEL || modifier == EXPAND_STACK_PARM)
+      || GET_CODE (target) == PARALLEL || modifier == EXPAND_STACK_PARM
+      /* Also make a temporary if the store is to volatile memory, to
+	 avoid individual accesses to aggregate members.  */
+      || (GET_CODE (target) == MEM
+	  && MEM_VOLATILE_P (target)
+	  && !TREE_ADDRESSABLE (TREE_TYPE (exp))))
     {
       if (avoid_temp_mem)
 	return NULL_RTX;
@@ -8548,7 +8560,9 @@ expand_expr_real_2 (sepops ops, rtx target, machine_mode tmode,
   reduce_bit_field = (INTEGRAL_TYPE_P (type)
 		      && !type_has_mode_precision_p (type));
 
-  if (reduce_bit_field && modifier == EXPAND_STACK_PARM)
+  if (reduce_bit_field
+      && (modifier == EXPAND_STACK_PARM
+	  || (target && GET_MODE (target) != mode)))
     target = 0;
 
   /* Use subtarget as the target for operand 0 of a binary operation.  */
@@ -11422,26 +11436,25 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 static rtx
 reduce_to_bit_field_precision (rtx exp, rtx target, tree type)
 {
+  scalar_int_mode mode = SCALAR_INT_TYPE_MODE (type);
   HOST_WIDE_INT prec = TYPE_PRECISION (type);
-  if (target && GET_MODE (target) != GET_MODE (exp))
-    target = 0;
-  /* For constant values, reduce using build_int_cst_type. */
-  poly_int64 const_exp;
-  if (poly_int_rtx_p (exp, &const_exp))
+  gcc_assert ((GET_MODE (exp) == VOIDmode || GET_MODE (exp) == mode)
+	      && (!target || GET_MODE (target) == mode));
+
+  /* For constant values, reduce using wide_int_to_tree. */
+  if (poly_int_rtx_p (exp))
     {
-      tree t = build_int_cst_type (type, const_exp);
+      tree t = wide_int_to_tree (type, wi::to_poly_wide (exp, mode));
       return expand_expr (t, target, VOIDmode, EXPAND_NORMAL);
     }
   else if (TYPE_UNSIGNED (type))
     {
-      scalar_int_mode mode = as_a <scalar_int_mode> (GET_MODE (exp));
       rtx mask = immed_wide_int_const
 	(wi::mask (prec, false, GET_MODE_PRECISION (mode)), mode);
       return expand_and (mode, exp, mask, target);
     }
   else
     {
-      scalar_int_mode mode = as_a <scalar_int_mode> (GET_MODE (exp));
       int count = GET_MODE_PRECISION (mode) - prec;
       exp = expand_shift (LSHIFT_EXPR, mode, exp, count, target, 0);
       return expand_shift (RSHIFT_EXPR, mode, exp, count, target, 0);
@@ -11719,16 +11732,20 @@ string_constant (tree arg, tree *ptr_offset, tree *mem_size, tree *decl)
       while (TREE_CODE (chartype) == ARRAY_TYPE)
 	chartype = TREE_TYPE (chartype);
       /* Convert a char array to an empty STRING_CST having an array
-	 of the expected type.  */
-      if (!initsize)
-	  initsize = integer_zero_node;
+	 of the expected type and size.  */
+      if (INTEGRAL_TYPE_P (chartype)
+	  && TYPE_PRECISION (chartype) == TYPE_PRECISION (char_type_node))
+	{
+	  if (!initsize)
+	    initsize = integer_zero_node;
 
-      unsigned HOST_WIDE_INT size = tree_to_uhwi (initsize);
-      init = build_string_literal (size ? 1 : 0, "", chartype, size);
-      init = TREE_OPERAND (init, 0);
-      init = TREE_OPERAND (init, 0);
+	  unsigned HOST_WIDE_INT size = tree_to_uhwi (initsize);
+	  init = build_string_literal (size, NULL, chartype, size);
+	  init = TREE_OPERAND (init, 0);
+	  init = TREE_OPERAND (init, 0);
 
-      *ptr_offset = integer_zero_node;
+	  *ptr_offset = integer_zero_node;
+	}
     }
 
   if (decl)

@@ -546,12 +546,16 @@ static tree
 map_arguments (tree parms, tree args)
 {
   for (tree p = parms; p; p = TREE_CHAIN (p))
-    {
-      int level;
-      int index;
-      template_parm_level_and_index (TREE_VALUE (p), &level, &index);
-      TREE_PURPOSE (p) = TMPL_ARG (args, level, index);
-    }
+    if (args)
+      {
+	int level;
+	int index;
+	template_parm_level_and_index (TREE_VALUE (p), &level, &index);
+	TREE_PURPOSE (p) = TMPL_ARG (args, level, index);
+      }
+    else
+      TREE_PURPOSE (p) = template_parm_to_arg (p);
+
   return parms;
 }
 
@@ -682,7 +686,8 @@ normalize_concept_check (tree check, tree args, norm_info info)
     }
 
   /* Substitute through the arguments of the concept check. */
-  targs = tsubst_template_args (targs, args, info.complain, info.in_decl);
+  if (args)
+    targs = tsubst_template_args (targs, args, info.complain, info.in_decl);
   if (targs == error_mark_node)
     return error_mark_node;
 
@@ -835,6 +840,8 @@ get_normalized_constraints_from_decl (tree d, bool diag = false)
   if (!diag)
     if (tree *p = hash_map_safe_get (normalized_map, tmpl))
       return *p;
+
+  push_nested_class_guard pncs (DECL_CONTEXT (d));
 
   tree args = generic_targs_for (tmpl);
   tree ci = get_constraints (decl);
@@ -1071,6 +1078,19 @@ associate_classtype_constraints (tree type)
 	 original declaration.  */
       if (tree orig_ci = get_constraints (decl))
         {
+	  if (int extra_levels = (TMPL_PARMS_DEPTH (current_template_parms)
+				  - TMPL_ARGS_DEPTH (TYPE_TI_ARGS (type))))
+	    {
+	      /* If there is a discrepancy between the current template depth
+		 and the template depth of the original declaration, then we
+		 must be redeclaring a class template as part of a friend
+		 declaration within another class template.  Before matching
+		 constraints, we need to reduce the template parameter level
+		 within the current constraints via substitution.  */
+	      tree outer_gtargs = template_parms_to_args (current_template_parms);
+	      TREE_VEC_LENGTH (outer_gtargs) = extra_levels;
+	      ci = tsubst_constraint_info (ci, outer_gtargs, tf_none, NULL_TREE);
+	    }
           if (!equivalent_constraints (ci, orig_ci))
             {
 	      error ("%qT does not match original declaration", type);
@@ -1257,7 +1277,6 @@ build_concept_check_arguments (tree arg, tree rest)
     }
   else
     {
-      gcc_assert (rest != NULL_TREE);
       args = rest;
     }
   return args;
@@ -1356,13 +1375,6 @@ build_concept_check (tree target, tree args, tsubst_flags_t complain)
 tree
 build_concept_check (tree decl, tree arg, tree rest, tsubst_flags_t complain)
 {
-  if (arg == NULL_TREE && rest == NULL_TREE)
-    {
-      tree id = build_nt (TEMPLATE_ID_EXPR, decl, rest);
-      error ("invalid use concept %qE", id);
-      return error_mark_node;
-    }
-
   tree args = build_concept_check_arguments (arg, rest);
 
   if (standard_concept_p (decl))
@@ -1473,7 +1485,7 @@ finish_shorthand_constraint (tree decl, tree constr)
 
   /* Get the argument and overload used for the requirement
      and adjust it if we're going to expand later.  */
-  tree arg = template_parm_to_arg (build_tree_list (NULL_TREE, decl));
+  tree arg = template_parm_to_arg (decl);
   if (apply_to_each_p && declared_pack_p)
     arg = PACK_EXPANSION_PATTERN (TREE_VEC_ELT (ARGUMENT_PACK_ARGS (arg), 0));
 
@@ -1864,7 +1876,10 @@ hash_placeholder_constraint (tree c)
 static tree
 tsubst_valid_expression_requirement (tree t, tree args, subst_info info)
 {
-  return tsubst_expr (t, args, info.complain, info.in_decl, false);
+  tree r = tsubst_expr (t, args, info.complain, info.in_decl, false);
+  if (convert_to_void (r, ICV_STATEMENT, info.complain) == error_mark_node)
+    return error_mark_node;
+  return r;
 }
 
 
@@ -2002,8 +2017,6 @@ tsubst_compound_requirement (tree t, tree args, subst_info info)
 static tree
 tsubst_nested_requirement (tree t, tree args, subst_info info)
 {
-  gcc_assert (!uses_template_parms (args));
-
   /* Ensure that we're in an evaluation context prior to satisfaction.  */
   tree norm = TREE_VALUE (TREE_TYPE (t));
   tree result = satisfy_constraint (norm, args, info);
@@ -2168,9 +2181,7 @@ tsubst_requires_expr (tree t, tree args,
   if (reqs == error_mark_node)
     return boolean_false_node;
 
-  /* In certain cases, produce a new requires-expression.
-     Otherwise the value of the expression is true.  */
-  if (processing_template_decl && uses_template_parms (args))
+  if (processing_template_decl)
     return finish_requires_expr (cp_expr_location (t), parms, reqs);
 
   return boolean_true_node;
@@ -2487,11 +2498,12 @@ satisfy_disjunction (tree t, tree args, subst_info info)
 tree
 satisfaction_value (tree t)
 {
-  if (t == error_mark_node)
+  if (t == error_mark_node || t == boolean_true_node || t == boolean_false_node)
     return t;
-  if (t == boolean_true_node || t == integer_one_node)
+  gcc_assert (TREE_CODE (t) == INTEGER_CST);
+  if (integer_onep (t))
     return boolean_true_node;
-  if (t == boolean_false_node || t == integer_zero_node)
+  if (integer_zerop (t))
     return boolean_false_node;
 
   /* Anything else should be invalid.  */
@@ -2733,17 +2745,23 @@ static tree
 satisfy_declaration_constraints (tree t, subst_info info)
 {
   gcc_assert (DECL_P (t));
+  const tree saved_t = t;
 
   /* For inherited constructors, consider the original declaration;
      it has the correct template information attached. */
-  if (flag_new_inheriting_ctors)
-    t = strip_inheriting_ctors (t);
+  t = strip_inheriting_ctors (t);
+  tree inh_ctor_targs = NULL_TREE;
+  if (t != saved_t)
+    if (tree ti = DECL_TEMPLATE_INFO (saved_t))
+      /* The inherited constructor points to an instantiation of a constructor
+	 template; remember its template arguments.  */
+      inh_ctor_targs = TI_ARGS (ti);
 
   /* Update the declaration for diagnostics.  */
   info.in_decl = t;
 
   if (info.quiet ())
-    if (tree *result = hash_map_safe_get (decl_satisfied_cache, t))
+    if (tree *result = hash_map_safe_get (decl_satisfied_cache, saved_t))
       return *result;
 
   /* Get the normalized constraints.  */
@@ -2757,6 +2775,8 @@ satisfy_declaration_constraints (tree t, subst_info info)
       /* The initial parameter mapping is the complete set of
 	 template arguments substituted into the declaration.  */
       args = TI_ARGS (ti);
+      if (inh_ctor_targs)
+	args = add_outermost_template_args (args, inh_ctor_targs);
     }
   else
     {
@@ -2776,7 +2796,7 @@ satisfy_declaration_constraints (tree t, subst_info info)
     }
 
   if (info.quiet ())
-    hash_map_safe_put<hm_ggc> (decl_satisfied_cache, t, result);
+    hash_map_safe_put<hm_ggc> (decl_satisfied_cache, saved_t, result);
 
   return result;
 }
@@ -2840,6 +2860,9 @@ constraint_satisfaction_value (tree t, tree args, tsubst_flags_t complain)
 bool
 constraints_satisfied_p (tree t)
 {
+  if (!flag_concepts)
+    return true;
+
   return constraint_satisfaction_value (t, tf_none) == boolean_true_node;
 }
 
@@ -2849,6 +2872,9 @@ constraints_satisfied_p (tree t)
 bool
 constraints_satisfied_p (tree t, tree args)
 {
+  if (!flag_concepts)
+    return true;
+
   return constraint_satisfaction_value (t, args, tf_none) == boolean_true_node;
 }
 
@@ -2942,12 +2968,15 @@ finish_compound_requirement (location_t loc, tree expr, tree type, bool noexcept
 tree
 finish_nested_requirement (location_t loc, tree expr)
 {
+  /* Currently open template headers have dummy arg vectors, so don't
+     pass into normalization.  */
+  tree norm = normalize_constraint_expression (expr, NULL_TREE, false);
+  tree args = current_template_parms
+    ? template_parms_to_args (current_template_parms) : NULL_TREE;
+
   /* Save the normalized constraint and complete set of normalization
      arguments with the requirement.  We keep the complete set of arguments
      around for re-normalization during diagnostics.  */
-  tree args = current_template_parms
-    ? template_parms_to_args (current_template_parms) : NULL_TREE;
-  tree norm = normalize_constraint_expression (expr, args, false);
   tree info = build_tree_list (args, norm);
 
   /* Build the constraint, saving its normalization as its type.  */
@@ -3238,7 +3267,8 @@ static tree
 diagnose_valid_expression (tree expr, tree args, tree in_decl)
 {
   tree result = tsubst_expr (expr, args, tf_none, in_decl, false);
-  if (result != error_mark_node)
+  if (result != error_mark_node
+      && convert_to_void (result, ICV_STATEMENT, tf_none) != error_mark_node)
     return result;
 
   location_t loc = cp_expr_loc_or_input_loc (expr);
@@ -3246,7 +3276,10 @@ diagnose_valid_expression (tree expr, tree args, tree in_decl)
     {
       /* Replay the substitution error.  */
       inform (loc, "the required expression %qE is invalid, because", expr);
-      tsubst_expr (expr, args, tf_error, in_decl, false);
+      if (result == error_mark_node)
+	tsubst_expr (expr, args, tf_error, in_decl, false);
+      else
+	convert_to_void (result, ICV_STATEMENT, tf_error);
     }
   else
     inform (loc, "the required expression %qE is invalid", expr);

@@ -478,6 +478,7 @@ expand_vector_divmod (gimple_stmt_iterator *gsi, tree type, tree op0,
 {
   bool use_pow2 = true;
   bool has_vector_shift = true;
+  bool use_abs_op1 = false;
   int mode = -1, this_mode;
   int pre_shift = -1, post_shift;
   unsigned int nunits = nunits_for_known_piecewise_op (type);
@@ -618,8 +619,11 @@ expand_vector_divmod (gimple_stmt_iterator *gsi, tree type, tree op0,
 
 	  /* n rem d = n rem -d */
 	  if (code == TRUNC_MOD_EXPR && d < 0)
-	    d = abs_d;
-	  else if (abs_d == HOST_WIDE_INT_1U << (prec - 1))
+	    {
+	      d = abs_d;
+	      use_abs_op1 = true;
+	    }
+	  if (abs_d == HOST_WIDE_INT_1U << (prec - 1))
 	    {
 	      /* This case is not handled correctly below.  */
 	      mode = -2;
@@ -899,6 +903,23 @@ expand_vector_divmod (gimple_stmt_iterator *gsi, tree type, tree op0,
   if (op == unknown_optab
       || optab_handler (op, TYPE_MODE (type)) == CODE_FOR_nothing)
     return NULL_TREE;
+  if (use_abs_op1)
+    {
+      tree_vector_builder elts;
+      if (!elts.new_unary_operation (type, op1, false))
+	return NULL_TREE;
+      unsigned int count = elts.encoded_nelts ();
+      for (unsigned int i = 0; i < count; ++i)
+	{
+	  tree elem1 = VECTOR_CST_ELT (op1, i);
+
+	  tree elt = const_unop (ABS_EXPR, TREE_TYPE (elem1), elem1);
+	  if (elt == NULL_TREE)
+	    return NULL_TREE;
+	  elts.quick_push (elt);
+	}
+      op1 = elts.build ();
+    }
   tem = gimplify_build2 (gsi, MULT_EXPR, type, cur_op, op1);
   op = optab_for_tree_code (MINUS_EXPR, type, optab_default);
   if (op == unknown_optab
@@ -1696,6 +1717,12 @@ expand_vector_conversion (gimple_stmt_iterator *gsi)
   gimple *stmt = gsi_stmt (*gsi);
   gimple *g;
   tree lhs = gimple_call_lhs (stmt);
+  if (lhs == NULL_TREE)
+    {
+      g = gimple_build_nop ();
+      gsi_replace (gsi, g, false);
+      return;
+    }
   tree arg = gimple_call_arg (stmt, 0);
   tree ret_type = TREE_TYPE (lhs);
   tree arg_type = TREE_TYPE (arg);

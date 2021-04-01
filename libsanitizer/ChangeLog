@@ -1,3 +1,31 @@
+2021-01-03  Iain Sandoe  <iain@sandoe.co.uk>
+	    Jakub Jelinek   <jakub@redhat.com>
+
+	PR target/97865
+	* configure.tgt: Add dynamic_lookup to EXTRA_CXXFLAGS for
+	Darwin.
+	* configure: Regenerate.
+
+2021-01-01  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backported from master:
+	2020-11-21  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* configure.tgt: Allow x86_64 Darwin2x.
+
+2020-08-03  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* sanitizer_common/sanitizer_linux.cpp: Cherry-pick llvm-project
+	revision f0e9b76c3500496f8f3ea7abe6f4bf801e3b41e7.
+
+2020-07-23  Release Manager
+
+	* GCC 10.2.0 released.
+
+2020-05-07  Release Manager
+
+	* GCC 10.1.0 released.
+
 2020-03-01  Iain Sandoe  <iain@sandoe.co.uk>
 
 	PR sanitizer/93731

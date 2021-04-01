@@ -429,7 +429,14 @@ gfc_build_array_ref (tree base, tree offset, tree decl, tree vptr)
   /* If decl or vptr are non-null, pointer arithmetic for the array reference
      is likely. Generate the 'span' for the array reference.  */
   if (vptr)
-    span = gfc_vptr_size_get (vptr);
+    {
+      span = gfc_vptr_size_get (vptr);
+
+      /* Check if this is an unlimited polymorphic object carrying a character
+	 payload. In this case, the 'len' field is non-zero.  */
+      if (decl && GFC_CLASS_TYPE_P (TREE_TYPE (decl)))
+	span = gfc_resize_class_size_with_len (NULL, decl, span);
+    }
   else if (decl)
     span = get_array_span (type, decl);
 
@@ -636,6 +643,9 @@ gfc_call_malloc (stmtblock_t * block, tree type, tree size)
 
   /* Call malloc.  */
   gfc_start_block (&block2);
+
+  if (size == NULL_TREE)
+    size = build_int_cst (size_type_node, 1);
 
   size = fold_convert (size_type_node, size);
   size = fold_build2_loc (input_location, MAX_EXPR, size_type_node, size,
@@ -1808,7 +1818,7 @@ void
 gfc_set_backend_locus (locus * loc)
 {
   gfc_current_backend_file = loc->lb->file;
-  input_location = loc->lb->location;
+  input_location = gfc_get_location (loc);
 }
 
 
@@ -1818,7 +1828,10 @@ gfc_set_backend_locus (locus * loc)
 void
 gfc_restore_backend_locus (locus * loc)
 {
-  gfc_set_backend_locus (loc);
+  /* This only restores the information captured by gfc_save_backend_locus,
+     intentionally does not use gfc_get_location.  */
+  input_location = loc->lb->location;
+  gfc_current_backend_file = loc->lb->file;
   free (loc->lb);
 }
 

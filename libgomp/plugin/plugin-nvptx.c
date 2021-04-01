@@ -546,15 +546,6 @@ nvptx_get_num_devices (void)
 {
   int n;
 
-  /* PR libgomp/65099: Currently, we only support offloading in 64-bit
-     configurations.  */
-  if (sizeof (void *) != 8)
-    {
-      GOMP_PLUGIN_debug (0, "Disabling nvptx offloading;"
-			 " only 64-bit configurations are supported\n");
-      return 0;
-    }
-
   /* This function will be called before the plugin has been initialized in
      order to enumerate available devices, but CUDA API routines can't be used
      until cuInit has been called.  Just call it now (but don't yet do any
@@ -1040,9 +1031,17 @@ goacc_profiling_acc_ev_free (struct goacc_thread *thr, void *p)
 static bool
 nvptx_free (void *p, struct ptx_device *ptx_dev)
 {
-  /* Assume callback context if this is null.  */
-  if (GOMP_PLUGIN_acc_thread () == NULL)
+  CUdeviceptr pb;
+  size_t ps;
+
+  CUresult r = CUDA_CALL_NOCHECK (cuMemGetAddressRange, &pb, &ps,
+				  (CUdeviceptr) p);
+  if (r == CUDA_ERROR_NOT_PERMITTED)
     {
+      /* We assume that this error indicates we are in a CUDA callback context,
+	 where all CUDA calls are not allowed (see cuStreamAddCallback
+	 documentation for description). Arrange to free this piece of device
+	 memory later.  */
       struct ptx_free_block *n
 	= GOMP_PLUGIN_malloc (sizeof (struct ptx_free_block));
       n->ptr = p;
@@ -1052,11 +1051,11 @@ nvptx_free (void *p, struct ptx_device *ptx_dev)
       pthread_mutex_unlock (&ptx_dev->free_blocks_lock);
       return true;
     }
-
-  CUdeviceptr pb;
-  size_t ps;
-
-  CUDA_CALL (cuMemGetAddressRange, &pb, &ps, (CUdeviceptr) p);
+  else if (r != CUDA_SUCCESS)
+    {
+      GOMP_PLUGIN_error ("cuMemGetAddressRange error: %s", cuda_error (r));
+      return false;
+    }
   if ((CUdeviceptr) p != pb)
     {
       GOMP_PLUGIN_error ("invalid device address");

@@ -549,12 +549,14 @@ Objective-C and Objective-C++ Dialects}.
 @gccoptlist{-p  -pg  -fprofile-arcs  --coverage  -ftest-coverage @gol
 -fprofile-abs-path @gol
 -fprofile-dir=@var{path}  -fprofile-generate  -fprofile-generate=@var{path} @gol
--fprofile-note=@var{path}  -fprofile-update=@var{method} @gol
--fprofile-filter-files=@var{regex}  -fprofile-exclude-files=@var{regex} -fprofile-reproducibility @gol
+-fprofile-note=@var{path} -fprofile-prefix-path=@var{path} @gol
+-fprofile-update=@var{method} -fprofile-filter-files=@var{regex} @gol
+-fprofile-exclude-files=@var{regex} @gol
+-fprofile-reproducible=@r{[}multithreaded@r{|}parallel-runs@r{|}serial@r{]} @gol
 -fsanitize=@var{style}  -fsanitize-recover  -fsanitize-recover=@var{style} @gol
 -fasan-shadow-offset=@var{number}  -fsanitize-sections=@var{s1},@var{s2},... @gol
 -fsanitize-undefined-trap-on-error  -fbounds-check @gol
--fcf-protection=@r{[}full@r{|}branch@r{|}return@r{|}none@r{]} @gol
+-fcf-protection=@r{[}full@r{|}branch@r{|}return@r{|}none@r{|}check@r{]} @gol
 -fstack-protector  -fstack-protector-all  -fstack-protector-strong @gol
 -fstack-protector-explicit  -fstack-check @gol
 -fstack-limit-register=@var{reg}  -fstack-limit-symbol=@var{sym} @gol
@@ -695,6 +697,7 @@ Objective-C and Objective-C++ Dialects}.
 -msign-return-address=@var{scope} @gol
 -mbranch-protection=@var{none}|@var{standard}|@var{pac-ret}[+@var{leaf}
 +@var{b-key}]|@var{bti} @gol
+-mharden-sls=@var{opts} @gol
 -march=@var{name}  -mcpu=@var{name}  -mtune=@var{name}  @gol
 -moverride=@var{string}  -mverbose-cost-dump @gol
 -mstack-protector-guard=@var{guard} -mstack-protector-guard-reg=@var{sysreg} @gol
@@ -861,7 +864,7 @@ Objective-C and Objective-C++ Dialects}.
 
 @emph{eBPF Options}
 @gccoptlist{-mbig-endian -mlittle-endian -mkernel=@var{version}
--mframe-limit=@var{bytes}}
+-mframe-limit=@var{bytes} -mxbpf}
 
 @emph{FR30 Options}
 @gccoptlist{-msmall-model  -mno-lsim}
@@ -1197,7 +1200,7 @@ See RS/6000 and PowerPC Options.
 -mgnu-attribute  -mno-gnu-attribute @gol
 -mstack-protector-guard=@var{guard} -mstack-protector-guard-reg=@var{reg} @gol
 -mstack-protector-guard-offset=@var{offset} -mprefixed -mno-prefixed @gol
--mpcrel -mno-pcrel}
+-mpcrel -mno-pcrel -mmma -mno-mmma}
 
 @emph{RX Options}
 @gccoptlist{-m64bit-doubles  -m32bit-doubles  -fpu  -nofpu@gol
@@ -4835,12 +4838,13 @@ Options} and @ref{Objective-C and Objective-C++ Dialect Options}.
 -Wenum-compare @r{(in C/ObjC; this is on by default in C++)} @gol
 -Wenum-conversion @r{in C/ObjC;} @gol
 -Wformat   @gol
+-Wformat-overflow  @gol
+-Wformat-truncation  @gol
 -Wint-in-bool-context  @gol
 -Wimplicit @r{(C and Objective-C only)} @gol
 -Wimplicit-int @r{(C and Objective-C only)} @gol
 -Wimplicit-function-declaration @r{(C and Objective-C only)} @gol
 -Winit-self @r{(only for C++)} @gol
--Wzero-length-bounds @gol
 -Wlogical-not-parentheses @gol
 -Wmain @r{(only for C/ObjC and unless} @option{-ffreestanding}@r{)}  @gol
 -Wmaybe-uninitialized @gol
@@ -4875,7 +4879,8 @@ Options} and @ref{Objective-C and Objective-C++ Dialect Options}.
 -Wunused-label     @gol
 -Wunused-value     @gol
 -Wunused-variable  @gol
--Wvolatile-register-var}
+-Wvolatile-register-var  @gol
+-Wzero-length-bounds}
 
 Note that some warning flags are not implied by @option{-Wall}.  Some of
 them warn about constructions that users generally do not consider
@@ -8004,7 +8009,7 @@ reduce the padding and so make the structure smaller.
 Warn if anything is declared more than once in the same scope, even in
 cases where multiple declaration is valid and changes nothing.
 
-@item -Wno-restrict
+@item -Wrestrict
 @opindex Wrestrict
 @opindex Wno-restrict
 Warn when an object referenced by a @code{restrict}-qualified parameter
@@ -8253,7 +8258,6 @@ Enabling this option effectively enables the following warnings:
 -Wanalyzer-tainted-array-index @gol
 -Wanalyzer-unsafe-call-within-signal-handler @gol
 -Wanalyzer-use-after-free @gol
--Wanalyzer-use-of-uninitialized-value @gol
 -Wanalyzer-use-of-pointer-in-stale-stack-frame @gol
 }
 
@@ -8425,15 +8429,6 @@ to disable it.
 
 This diagnostic warns for paths through the code in which a pointer
 is dereferenced that points to a variable in a stale stack frame.
-
-@item -Wno-analyzer-use-of-uninitialized-value
-@opindex Wanalyzer-use-of-uninitialized-value
-@opindex Wno-analyzer-use-of-uninitialized-value
-This warning requires @option{-fanalyzer}, which enables it; use
-@option{-Wno-analyzer-use-of-uninitialized-value} to disable it.
-
-This diagnostic warns for paths through the code in which an uninitialized
-value is used.
 
 @end table
 
@@ -9238,14 +9233,15 @@ by @option{-O2} and also turns on the following optimization flags:
 -floop-unroll-and-jam @gol
 -fpeel-loops @gol
 -fpredictive-commoning @gol
+-fsplit-loops @gol
 -fsplit-paths @gol
--ftree-loop-distribute-patterns @gol
 -ftree-loop-distribution @gol
 -ftree-loop-vectorize @gol
 -ftree-partial-pre @gol
 -ftree-slp-vectorize @gol
 -funswitch-loops @gol
 -fvect-cost-model @gol
+-fvect-cost-model=dynamic @gol
 -fversion-loops-for-strides}
 
 @item -O0
@@ -10260,7 +10256,7 @@ When enabled, interprocedural constant propagation performs function cloning
 when externally visible function can be called with constant arguments.
 Because this optimization can create multiple copies of functions,
 it may significantly increase code size
-(see @option{--param ipcp-unit-growth=@var{value}}).
+(see @option{--param ipa-cp-unit-growth=@var{value}}).
 This flag is enabled by default at @option{-O3}.
 It is also enabled by @option{-fprofile-use} and @option{-fauto-profile}.
 
@@ -11210,6 +11206,14 @@ conflicting translation units.  Specifically
 precedence; and for example @option{-ffp-contract=off} takes precedence
 over @option{-ffp-contract=fast}.  You can override them at link time.
 
+Diagnostic options such as @option{-Wstringop-overflow} are passed
+through to the link stage and their setting matches that of the
+compile-step at function granularity.  Note that this matters only
+for diagnostics emitted during optimization.  Note that code
+transforms such as inlining can lead to warnings being enabled
+or disabled for regions if code not consistent with the setting
+at compile time.
+
 When you need to pass options to the assembler via @option{-Wa} or
 @option{-Xassembler} make sure to either compile such translation
 units with @option{-fno-lto} or consistently use the same assembler
@@ -11405,7 +11409,7 @@ default, GCC emits an error message when an inconsistent profile is detected.
 This option is enabled by @option{-fauto-profile}.
 
 @item -fprofile-partial-training
-@opindex fprofile-use
+@opindex fprofile-partial-training
 With @code{-fprofile-use} all portions of programs not executed during train
 run are optimized agressively for size rather than speed.  In some cases it is
 not practical to train all possible hot paths in the program. (For
@@ -12141,7 +12145,7 @@ For example, parameter value 20 limits unit growth to 1.2 times the original
 size. Cold functions (either marked cold via an attribute or by profile
 feedback) are not accounted into the unit size.
 
-@item ipcp-unit-growth
+@item ipa-cp-unit-growth
 Specifies maximal overall growth of the compilation unit caused by
 interprocedural constant propagation.  For example, parameter value 10 limits
 unit growth to 1.1 times the original size.
@@ -13147,9 +13151,6 @@ will not try to thread through its block.
 Maximum number of nested calls to search for control dependencies
 during uninitialized variable analysis.
 
-@item max-once-peeled-insns
-The maximum number of insns of a peeled loop that rolls only once.
-
 @item sra-max-scalarization-size-Osize
 Maximum size, in storage units, of an aggregate
 which should be considered for scalarization when compiling for size.
@@ -13180,6 +13181,37 @@ of iterations or recursive calls GCC performs when optimizing certain
 statements or when determining their validity prior to issuing
 diagnostics.
 
+@item store-merging-max-size
+Maximum size of a single store merging region in bytes.
+
+@item hash-table-verification-limit
+The number of elements for which hash table verification is done
+for each searched element.
+
+@item max-find-base-term-values
+Maximum number of VALUEs handled during a single find_base_term call.
+
+@item analyzer-max-enodes-per-program-point
+The maximum number of exploded nodes per program point within
+the analyzer, before terminating analysis of that point.
+
+@item analyzer-min-snodes-for-call-summary
+The minimum number of supernodes within a function for the
+analyzer to consider summarizing its effects at call sites.
+
+@item analyzer-max-recursion-depth
+The maximum number of times a callsite can appear in a call stack
+within the analyzer, before terminating analysis of a call that would
+recurse deeper.
+
+@item gimple-fe-computed-hot-bb-threshold
+The number of executions of a basic block which is considered hot.
+The parameter is used only in GIMPLE FE.
+
+@item analyzer-bb-explosion-factor
+The maximum number of 'after supernode' exploded nodes within the analyzer
+per supernode, before terminating analysis.
+
 @end table
 
 The following choices of @var{name} are available on AArch64 targets:
@@ -13203,6 +13235,24 @@ approximation is enabled.  The default value is 1.
 The number of Newton iterations for calculating the reciprocal for double type.
 The precision of division is propotional to this param when division
 approximation is enabled.  The default value is 2.
+
+@item aarch64-autovec-preference
+Force an ISA selection strategy for auto-vectorization.  Accepts values from
+0 to 4, inclusive.
+@table @samp
+@item 0
+Use the default heuristics.
+@item 1
+Use only Advanced SIMD for auto-vectorization.
+@item 2
+Use only SVE for auto-vectorization.
+@item 3
+Use both Advanced SIMD and SVE.  Prefer Advanced SIMD when the costs are
+deemed equal.
+@item 4
+Use both Advanced SIMD and SVE.  Prefer SVE when the costs are deemed equal.
+@end table
+The default value is 0.
 
 @end table
 
@@ -13398,6 +13448,21 @@ If @var{path} is specified, GCC saves @file{.gcno} file into @var{path}
 location.  If you combine the option with multiple source files,
 the @file{.gcno} file will be overwritten.
 
+@item -fprofile-prefix-path=@var{path}
+@opindex fprofile-prefix-path
+
+This option can be used in combination with
+@option{profile-generate=}@var{profile_dir} and
+@option{profile-use=}@var{profile_dir} to inform GCC where is the base
+directory of built source tree.  By default @var{profile_dir} will contain
+files with mangled absolute paths of all object files in the built project.
+This is not desirable when directory used to build the instrumented binary
+differs from the directory used to build the binary optimized with profile
+feedback because the profile data will not be found during the optimized build.
+In such setups @option{-fprofile-prefix-path=}@var{path} with @var{path}
+pointing to the base directory of the build can be used to strip the irrelevant
+part of the path and keep all file names relative to the main build directory.
+
 @item -fprofile-update=@var{method}
 @opindex fprofile-update
 
@@ -13433,14 +13498,14 @@ all the regular expressions (separated by a semi-colon).
 For example, @option{-fprofile-exclude-files=/usr/*} will prevent instrumentation
 of all files that are located in @file{/usr/} folder.
 
-@item -fprofile-reproducible
+@item -fprofile-reproducible=@r{[}multithreaded@r{|}parallel-runs@r{|}serial@r{]}
 @opindex fprofile-reproducible
 Control level of reproducibility of profile gathered by
 @code{-fprofile-generate}.  This makes it possible to rebuild program
 with same outcome which is useful, for example, for distribution
 packages.
 
-With @option{-fprofile-reproducibility=serial} the profile gathered by
+With @option{-fprofile-reproducible=serial} the profile gathered by
 @option{-fprofile-generate} is reproducible provided the trained program
 behaves the same at each invocation of the train run, it is not
 multi-threaded and profile data streaming is always done in the same
@@ -13455,7 +13520,7 @@ Such non-reproducible part of programs may be annotated by
 @option{-l} can be used to dump gathered data and verify that they are
 indeed reproducible.
 
-With @option{-fprofile-reproducibility=parallel-runs} collected profile
+With @option{-fprofile-reproducible=parallel-runs} collected profile
 stays reproducible regardless the order of streaming of the data into
 gcda files.  This setting makes it possible to run multiple instances of
 instrumented program in parallel (such as with @code{make -j}). This
@@ -13786,7 +13851,7 @@ operand constant, @code{__sanitizer_cov_trace_cmpf} or
 @code{__sanitizer_cov_trace_cmpd} for float or double comparisons and
 @code{__sanitizer_cov_trace_switch} for switch statements.
 
-@item -fcf-protection=@r{[}full@r{|}branch@r{|}return@r{|}none@r{]}
+@item -fcf-protection=@r{[}full@r{|}branch@r{|}return@r{|}none@r{|}check@r{]}
 @opindex fcf-protection
 Enable code instrumentation of control-flow transfers to increase
 program security by checking that target addresses of control-flow
@@ -13803,6 +13868,11 @@ implements checking of validity at the point of returning from a
 function.  The value @code{full} is an alias for specifying both
 @code{branch} and @code{return}. The value @code{none} turns off
 instrumentation.
+
+The value @code{check} is used for the final link with link-time
+optimization (LTO).  An error is issued if LTO object files are
+compiled with different @option{-fcf-protection} values.  The
+value @code{check} is ignored at the compile time.
 
 The macro @code{__CET__} is defined when @option{-fcf-protection} is
 used.  The first bit of @code{__CET__} is set to 1 for the value
@@ -16742,7 +16812,9 @@ dynamically linked.  This is the default code model.
 @item -mcmodel=large
 @opindex mcmodel=large
 Generate code for the large code model.  This makes no assumptions about
-addresses and sizes of sections.  Programs can be statically linked only.
+addresses and sizes of sections.  Programs can be statically linked only.  The
+@option{-mcmodel=large} option is incompatible with @option{-mabi=ilp32},
+@option{-fpic} and @option{-fPIC}.
 
 @item -mstrict-align
 @itemx -mno-strict-align
@@ -16876,6 +16948,7 @@ instruction set.  If using a later revision, e.g. @option{-march=armv8.1-a}
 or @option{-march=armv8-a+lse}, the ARMv8.1-Atomics instructions will be
 used directly.  The same applies when using @option{-mcpu=} when the
 selected cpu supports the @samp{lse} feature.
+This option is on by default.
 
 @item -march=@var{name}
 @opindex march
@@ -16921,16 +16994,17 @@ performance of the code.  Permissible values for this option are:
 @samp{cortex-a57}, @samp{cortex-a72}, @samp{cortex-a73}, @samp{cortex-a75},
 @samp{cortex-a76}, @samp{cortex-a76ae}, @samp{cortex-a77},
 @samp{cortex-a65}, @samp{cortex-a65ae}, @samp{cortex-a34},
-@samp{ares}, @samp{exynos-m1}, @samp{emag}, @samp{falkor},
-@samp{neoverse-e1},@samp{neoverse-n1},@samp{qdf24xx}, @samp{saphira},
-@samp{phecda}, @samp{xgene1}, @samp{vulcan}, @samp{octeontx},
+@samp{ares}, @samp{exynos-m1}, @samp{emag}, @samp{falkor}, @samp{neoverse-e1},
+@samp{neoverse-n1}, @samp{neoverse-n2}, @samp{neoverse-v1}, @samp{qdf24xx},
+@samp{saphira}, @samp{phecda}, @samp{xgene1}, @samp{vulcan}, @samp{octeontx},
 @samp{octeontx81},  @samp{octeontx83},
 @samp{octeontx2}, @samp{octeontx2t98}, @samp{octeontx2t96}
 @samp{octeontx2t93}, @samp{octeontx2f95}, @samp{octeontx2f95n},
-@samp{octeontx2f95mm}
+@samp{octeontx2f95mm},
+@samp{a64fx},
 @samp{thunderx}, @samp{thunderxt88},
 @samp{thunderxt88p1}, @samp{thunderxt81}, @samp{tsv110},
-@samp{thunderxt83}, @samp{thunderx2t99},
+@samp{thunderxt83}, @samp{thunderx2t99}, @samp{thunderx3t110}, @samp{zeus},
 @samp{cortex-a57.cortex-a53}, @samp{cortex-a72.cortex-a53},
 @samp{cortex-a73.cortex-a35}, @samp{cortex-a73.cortex-a53},
 @samp{cortex-a75.cortex-a55}, @samp{cortex-a76.cortex-a55}
@@ -17016,6 +17090,17 @@ argument @samp{leaf} can be used to extend the signing to include leaf
 functions.  The optional argument @samp{b-key} can be used to sign the functions
 with the B-key instead of the A-key.
 @samp{bti} turns on branch target identification mechanism.
+
+@item -mharden-sls=@var{opts}
+@opindex mharden-sls
+Enable compiler hardening against straight line speculation (SLS).
+@var{opts} is a comma-separated list of the following options:
+@table @samp
+@item retbr
+@item blr
+@end table
+In addition, @samp{-mharden-sls=all} enables all SLS hardening while
+@samp{-mharden-sls=none} disables all SLS hardening.
 
 @item -msve-vector-bits=@var{bits}
 @opindex msve-vector-bits
@@ -18679,6 +18764,10 @@ The single- and double-precision floating-point instructions.
 
 @item +nofp
 Disable the floating-point extension.
+
+@item +cdecp0, +cdecp1, ... , +cdecp7
+Enable the Custom Datapath Extension (CDE) on selected coprocessors according
+to the numbers given in the options in the range 0 to 7.
 @end table
 
 @item  armv8-m.main
@@ -18697,6 +18786,10 @@ The single- and double-precision floating-point instructions.
 
 @item +nofp
 Disable the floating-point extension.
+
+@item +cdecp0, +cdecp1, ... , +cdecp7
+Enable the Custom Datapath Extension (CDE) on selected coprocessors according
+to the numbers given in the options in the range 0 to 7.
 @end table
 
 @item armv8-r
@@ -18746,12 +18839,12 @@ Permissible names are: @samp{arm7tdmi}, @samp{arm7tdmi-s}, @samp{arm710t},
 @samp{cortex-r5}, @samp{cortex-r7}, @samp{cortex-r8}, @samp{cortex-r52},
 @samp{cortex-m0}, @samp{cortex-m0plus}, @samp{cortex-m1}, @samp{cortex-m3},
 @samp{cortex-m4}, @samp{cortex-m7}, @samp{cortex-m23}, @samp{cortex-m33},
-@samp{cortex-m35p},
+@samp{cortex-m35p}, @samp{cortex-m55},
 @samp{cortex-m1.small-multiply}, @samp{cortex-m0.small-multiply},
 @samp{cortex-m0plus.small-multiply}, @samp{exynos-m1}, @samp{marvell-pj4},
-@samp{neoverse-n1}, @samp{xscale}, @samp{iwmmxt}, @samp{iwmmxt2},
-@samp{ep9312}, @samp{fa526}, @samp{fa626}, @samp{fa606te}, @samp{fa626te},
-@samp{fmp626}, @samp{fa726te}, @samp{xgene1}.
+@samp{neoverse-n1}, @samp{neoverse-n2}, @samp{neoverse-v1}, @samp{xscale},
+@samp{iwmmxt}, @samp{iwmmxt2}, @samp{ep9312}, @samp{fa526}, @samp{fa626},
+@samp{fa606te}, @samp{fa626te}, @samp{fmp626}, @samp{fa726te}, @samp{xgene1}.
 
 Additionally, this option can specify that GCC should tune the performance
 of the code for a big.LITTLE system.  Permissible names are:
@@ -19141,7 +19234,7 @@ is only available when generating non-pic code for M-profile targets.
 @opindex mcmse
 Generate secure code as per the "ARMv8-M Security Extensions: Requirements on
 Development Tools Engineering Specification", which can be found on
-@url{http://infocenter.arm.com/help/topic/com.arm.doc.ecm0359818/ECM0359818_armv8m_security_extensions_reqs_on_dev_tools_1_0.pdf}.
+@url{https://developer.arm.com/documentation/ecm0359818/latest/}.
 
 @item -mfdpic
 @itemx -mno-fdpic
@@ -20976,6 +21069,14 @@ Generate code for a big-endian target.
 @item -mlittle-endian
 @opindex mlittle-endian
 Generate code for a little-endian target.  This is the default.
+
+@item -mxbpf
+Generate code for an expanded version of BPF, which relaxes some of
+the restrictions imposed by the BPF architecture:
+@itemize @minus
+@item Save and restore callee-saved registers at function entry and
+exit, respectively.
+@end itemize
 @end table
 
 @node FR30 Options
@@ -25566,7 +25667,8 @@ following options:
 -mpowerpc-gpopt  -mpowerpc-gfxopt @gol
 -mmulhw  -mdlmzb  -mmfpgpr  -mvsx @gol
 -mcrypto  -mhtm  -mpower8-fusion  -mpower8-vector @gol
--mquad-memory  -mquad-memory-atomic  -mfloat128  -mfloat128-hardware}
+-mquad-memory  -mquad-memory-atomic  -mfloat128 @gol
+-mfloat128-hardware -mprefixed -mpcrel -mmma}
 
 The particular options set for any particular CPU varies between
 compiler versions, depending on what setting seems to produce optimal
@@ -26114,9 +26216,10 @@ SVR4 ABI)@.
 @item -mabi=@var{abi-type}
 @opindex mabi
 Extend the current ABI with a particular extension, or remove such extension.
-Valid values are @samp{altivec}, @samp{no-altivec},
+Valid values are: @samp{altivec}, @samp{no-altivec},
 @samp{ibmlongdouble}, @samp{ieeelongdouble},
-@samp{elfv1}, @samp{elfv2}@.
+@samp{elfv1}, @samp{elfv2},
+and for AIX: @samp{vec-extabi}, @samp{vec-default}@.
 
 @item -mabi=ibmlongdouble
 @opindex mabi=ibmlongdouble
@@ -26562,6 +26665,13 @@ addressing (@option{-mprefixed}) options are enabled.
 @opindex mno-prefixed
 Generate (do not generate) addressing modes using prefixed load and
 store instructions when the option @option{-mcpu=future} is used.
+
+@item -mmma
+@itemx -mno-mma
+@opindex mmma
+@opindex mno-mma
+Generate (do not generate) the MMA instructions when the option
+@option{-mcpu=future} is used.
 @end table
 
 @node RX Options
@@ -26955,7 +27065,7 @@ system representing a certain processor type.  Possible values for
 @var{cpu-type} are @samp{z900}/@samp{arch5}, @samp{z990}/@samp{arch6},
 @samp{z9-109}, @samp{z9-ec}/@samp{arch7}, @samp{z10}/@samp{arch8},
 @samp{z196}/@samp{arch9}, @samp{zEC12}, @samp{z13}/@samp{arch11},
-@samp{z14}/@samp{arch12}, and @samp{native}.
+@samp{z14}/@samp{arch12}, @samp{z15}/@samp{arch13}, and @samp{native}.
 
 The default is @option{-march=z900}.
 
@@ -28598,14 +28708,14 @@ BMI, BMI2 and F16C instruction set support.
 
 @item broadwell
 Intel Broadwell CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3, SSSE3,
-SSE4.1, SSE4.2, POPCNT, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA,
-BMI, BMI2, F16C, RDSEED, ADCX and PREFETCHW instruction set support.
+SSE4.1, SSE4.2, POPCNT, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA, BMI, BMI2,
+F16C, RDSEED ADCX and PREFETCHW instruction set support.
 
 @item skylake
 Intel Skylake CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3, SSSE3,
 SSE4.1, SSE4.2, POPCNT, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA,
-BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, CLFLUSHOPT, XSAVEC and
-XSAVES instruction set support.
+BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, CLFLUSHOPT, XSAVEC and XSAVES
+instruction set support.
 
 @item bonnell
 Intel Bonnell CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3 and SSSE3
@@ -28613,34 +28723,36 @@ instruction set support.
 
 @item silvermont
 Intel Silvermont CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3, SSSE3,
-SSE4.1, SSE4.2, POPCNT, AES, PCLMUL and RDRND instruction set support.
+SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL and RDRND instruction set support.
 
 @item goldmont
 Intel Goldmont CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3, SSSE3,
-SSE4.1, SSE4.2, POPCNT, AES, PCLMUL, RDRND, XSAVE, XSAVEOPT and FSGSBASE
-instruction set support.
+SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND, XSAVE, XSAVEC, XSAVES,
+XSAVEOPT and FSGSBASE instruction set support.
 
 @item goldmont-plus
 Intel Goldmont Plus CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
-SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PCLMUL, RDRND, XSAVE, XSAVEOPT, FSGSBASE,
-PTWRITE, RDPID, SGX and UMIP instruction set support.
+SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND, XSAVE, XSAVEC,
+XSAVES, XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX and UMIP instruction set support.
 
 @item tremont
 Intel Tremont CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3, SSSE3,
-SSE4.1, SSE4.2, POPCNT, AES, PCLMUL, RDRND, XSAVE, XSAVEOPT, FSGSBASE, PTWRITE,
-RDPID, SGX, UMIP, GFNI-SSE, CLWB and ENCLV instruction set support.
+SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND, XSAVE, XSAVEC, XSAVES,
+XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX, UMIP, GFNI-SSE, CLWB, MOVDIRI,
+MOVDIR64B, CLDEMOTE and WAITPKG instruction set support.
 
 @item knl
 Intel Knight's Landing CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
 SSSE3, SSE4.1, SSE4.2, POPCNT, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA,
-BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, AVX512F, AVX512PF, AVX512ER and
-AVX512CD instruction set support.
+BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, PREFETCHWT1, AVX512F, AVX512PF,
+AVX512ER and AVX512CD instruction set support.
 
 @item knm
 Intel Knights Mill CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
 SSSE3, SSE4.1, SSE4.2, POPCNT, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA,
-BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, AVX512F, AVX512PF, AVX512ER, AVX512CD,
-AVX5124VNNIW, AVX5124FMAPS and AVX512VPOPCNTDQ instruction set support.
+BMI, BMI2, F16C, RDSEED, ADCX, PREFETCHW, PREFETCHWT1, AVX512F, AVX512PF,
+AVX512ER, AVX512CD, AVX5124VNNIW, AVX5124FMAPS and AVX512VPOPCNTDQ instruction
+set support.
 
 @item skylake-avx512
 Intel Skylake Server CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
@@ -28691,8 +28803,8 @@ SSE4.1, SSE4.2, POPCNT, PKU, AVX, AVX2, AES, PCLMUL, FSGSBASE, RDRND, FMA, BMI,
 BMI2, F16C, RDSEED, ADCX, PREFETCHW, CLFLUSHOPT, XSAVEC, XSAVES, AVX512F,
 AVX512VL, AVX512BW, AVX512DQ, AVX512CD, AVX512VBMI, AVX512IFMA, SHA, CLWB, UMIP,
 RDPID, GFNI, AVX512VBMI2, AVX512VPOPCNTDQ, AVX512BITALG, AVX512VNNI, VPCLMULQDQ,
-VAES, PCONFIG, WBNOINVD, MOVDIRI, MOVDIR64B and  AVX512VP2INTERSECT instruction
-set support.
+VAES, PCONFIG, WBNOINVD, MOVDIRI, MOVDIR64B, AVX512VP2INTERSECT and KEYLOCKER
+instruction set support.
 
 @item k6
 AMD K6 CPU with MMX instruction set support.
@@ -28768,6 +28880,13 @@ supersets BMI, BMI2, CLWB, F16C, FMA, FSGSBASE, AVX, AVX2, ADCX, RDSEED,
 MWAITX, SHA, CLZERO, AES, PCLMUL, CX16, MOVBE, MMX, SSE, SSE2, SSE3, SSE4A,
 SSSE3, SSE4.1, SSE4.2, ABM, XSAVEC, XSAVES, CLFLUSHOPT, POPCNT, RDPID,
 WBNOINVD, and 64-bit instruction set extensions.)
+
+@item znver3
+AMD Family 19h core based CPUs with x86-64 instruction set support. (This
+supersets BMI, BMI2, CLWB, F16C, FMA, FSGSBASE, AVX, AVX2, ADCX, RDSEED,
+MWAITX, SHA, CLZERO, AES, PCLMUL, CX16, MOVBE, MMX, SSE, SSE2, SSE3, SSE4A,
+SSSE3, SSE4.1, SSE4.2, ABM, XSAVEC, XSAVES, CLFLUSHOPT, POPCNT, RDPID,
+WBNOINVD, PKU, VPCLMULQDQ, VAES, and 64-bit instruction set extensions.)
 
 @item btver1
 CPUs based on AMD Family 14h cores with x86-64 instruction set support.  (This
@@ -30079,9 +30198,9 @@ Note that @option{-mcmodel=large} is incompatible with
 @option{-mindirect-branch=thunk-extern} since the thunk function may
 not be reachable in the large code model.
 
-Note that @option{-mindirect-branch=thunk-extern} is incompatible with
-@option{-fcf-protection=branch} since the external thunk cannot be modified
-to disable control-flow check.
+Note that @option{-mindirect-branch=thunk-extern} is compatible with
+@option{-fcf-protection=branch} since the external thunk can be made
+to enable control-flow check.
 
 @item -mfunction-return=@var{choice}
 @opindex mfunction-return
@@ -30093,6 +30212,10 @@ function return to external call and return thunk provided in a separate
 object file.  You can control this behavior for a specific function by
 using the function attribute @code{function_return}.
 @xref{Function Attributes}.
+
+Note that @option{-mindirect-return=thunk-extern} is compatible with
+@option{-fcf-protection=branch} since the external thunk can be made
+to enable control-flow check.
 
 Note that @option{-mcmodel=large} is incompatible with
 @option{-mfunction-return=thunk} and

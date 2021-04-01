@@ -16,6 +16,7 @@
 // <http://www.gnu.org/licenses/>.
 
 // { dg-do run { target c++14 } }
+// { dg-require-gthreads "" }
 
 #include <experimental/executor>
 #include <testsuite_hooks.h>
@@ -85,9 +86,16 @@ test02()
   VERIFY( e == g );
 }
 
+void
+test03()
+{
+  static_assert( ! std::is_default_constructible<net::system_context>::value, "" );
+}
+
 int
 main()
 {
   test01();
   test02();
+  test03();
 }

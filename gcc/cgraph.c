@@ -63,6 +63,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "selftest.h"
 #include "tree-into-ssa.h"
+#include "ipa-inline.h"
 
 /* FIXME: Only for PROP_loops, but cgraph shouldn't have to know about this.  */
 #include "tree-pass.h"
@@ -781,9 +782,22 @@ cgraph_edge::set_call_stmt (cgraph_edge *e, gcall *new_stmt,
 {
   tree decl;
 
+  cgraph_node *new_direct_callee = NULL;
+  if ((e->indirect_unknown_callee || e->speculative)
+      && (decl = gimple_call_fndecl (new_stmt)))
+    {
+      /* Constant propagation and especially inlining can turn an indirect call
+	 into a direct one.  */
+      new_direct_callee = cgraph_node::get (decl);
+      gcc_checking_assert (new_direct_callee);
+    }
+
   /* Speculative edges has three component, update all of them
      when asked to.  */
-  if (update_speculative && e->speculative)
+  if (update_speculative && e->speculative
+      /* If we are about to resolve the speculation by calling make_direct
+	 below, do not bother going over all the speculative edges now.  */
+      && !new_direct_callee)
     {
       cgraph_edge *direct, *indirect, *next;
       ipa_ref *ref;
@@ -813,6 +827,9 @@ cgraph_edge::set_call_stmt (cgraph_edge *e, gcall *new_stmt,
       return e_indirect ? indirect : direct;
     }
 
+  if (new_direct_callee)
+    e = make_direct (e, new_direct_callee);
+
   /* Only direct speculative edges go to call_site_hash.  */
   if (e->caller->call_site_hash
       && (!e->speculative || !e->indirect_unknown_callee)
@@ -823,16 +840,6 @@ cgraph_edge::set_call_stmt (cgraph_edge *e, gcall *new_stmt,
       (e->call_stmt, cgraph_edge_hasher::hash (e->call_stmt));
 
   e->call_stmt = new_stmt;
-  if (e->indirect_unknown_callee
-      && (decl = gimple_call_fndecl (new_stmt)))
-    {
-      /* Constant propagation (and possibly also inlining?) can turn an
-	 indirect call into a direct one.  */
-      cgraph_node *new_callee = cgraph_node::get (decl);
-
-      gcc_checking_assert (new_callee);
-      e = make_direct (e, new_callee);
-    }
 
   function *fun = DECL_STRUCT_FUNCTION (e->caller->decl);
   e->can_throw_external = stmt_can_throw_external (fun, new_stmt);
@@ -1269,14 +1276,15 @@ cgraph_edge::speculative_call_for_target (cgraph_node *target)
   return NULL;
 }
 
-/* Make an indirect edge with an unknown callee an ordinary edge leading to
-   CALLEE.  Speculations can be resolved in the process and EDGE can be removed
-   and deallocated.  Return the edge that now represents the call.  */
+/* Make an indirect or speculative EDGE with an unknown callee an ordinary edge
+   leading to CALLEE.  Speculations can be resolved in the process and EDGE can
+   be removed and deallocated.  Return the edge that now represents the
+   call.  */
 
 cgraph_edge *
 cgraph_edge::make_direct (cgraph_edge *edge, cgraph_node *callee)
 {
-  gcc_assert (edge->indirect_unknown_callee);
+  gcc_assert (edge->indirect_unknown_callee || edge->speculative);
 
   /* If we are redirecting speculative call, make it non-speculative.  */
   if (edge->speculative)
@@ -1469,6 +1477,16 @@ cgraph_edge::redirect_call_stmt_to_callee (cgraph_edge *e)
   if (e->indirect_unknown_callee
       || decl == e->callee->decl)
     return e->call_stmt;
+
+  if (decl && ipa_saved_clone_sources)
+    {
+      tree *p = ipa_saved_clone_sources->get (e->callee);
+      if (p && decl == *p)
+	{
+	  gimple_call_set_fndecl (e->call_stmt, e->callee->decl);
+	  return e->call_stmt;
+	}
+    }
 
   if (flag_checking && decl)
     {
@@ -2157,10 +2175,11 @@ cgraph_node::dump (FILE *f)
   if (parallelized_function)
     fprintf (f, " parallelized_function");
   if (DECL_IS_OPERATOR_NEW_P (decl))
-    fprintf (f, " operator_new");
+    fprintf (f, " %soperator_new",
+	     DECL_IS_REPLACEABLE_OPERATOR (decl) ? "replaceable_" : "");
   if (DECL_IS_OPERATOR_DELETE_P (decl))
-    fprintf (f, " operator_delete");
-
+    fprintf (f, " %soperator_delete",
+	     DECL_IS_REPLACEABLE_OPERATOR (decl) ? "replaceable_" : "");
 
   fprintf (f, "\n");
 
@@ -3092,15 +3111,17 @@ clone_of_p (cgraph_node *node, cgraph_node *node2)
 	return false;
       /* In case of instrumented expanded thunks, which can have multiple calls
 	 in them, we do not know how to continue and just have to be
-	 optimistic.  */
-      if (node->callees->next_callee)
+	 optimistic.  The same applies if all calls have already been inlined
+	 into the thunk.  */
+      if (!node->callees || node->callees->next_callee)
 	return true;
       node = node->callees->callee->ultimate_alias_target ();
 
       if (!node2->clone.param_adjustments
 	  || node2->clone.param_adjustments->first_param_intact_p ())
 	return false;
-      if (node2->former_clone_of == node->decl)
+      if (node2->former_clone_of == node->decl
+	  || node2->former_clone_of == node->former_clone_of)
 	return true;
 
       cgraph_node *n2 = node2;

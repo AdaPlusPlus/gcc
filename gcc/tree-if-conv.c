@@ -1139,6 +1139,11 @@ if_convertible_bb_p (class loop *loop, basic_block bb, basic_block exit_bb)
   if (EDGE_COUNT (bb->succs) > 2)
     return false;
 
+  gimple *last = last_stmt (bb);
+  if (gcall *call = safe_dyn_cast <gcall *> (last))
+    if (gimple_call_ctrl_altering_p (call))
+      return false;
+
   if (exit_bb)
     {
       if (bb != loop->latch)
@@ -2892,12 +2897,6 @@ ifcvt_local_dce (class loop *loop)
   enum gimple_code code;
   use_operand_p use_p;
   imm_use_iterator imm_iter;
-  std::pair <tree, tree> *name_pair;
-  unsigned int i;
-
-  FOR_EACH_VEC_ELT (redundant_ssa_names, i, name_pair)
-    replace_uses_by (name_pair->first, name_pair->second);
-  redundant_ssa_names.release ();
 
   /* The loop has a single BB only.  */
   basic_block bb = loop->header;
@@ -3100,6 +3099,13 @@ tree_if_conversion (class loop *loop, vec<gimple *> *preds)
   exit_bbs = BITMAP_ALLOC (NULL);
   bitmap_set_bit (exit_bbs, single_exit (loop)->dest->index);
   bitmap_set_bit (exit_bbs, loop->latch->index);
+
+  std::pair <tree, tree> *name_pair;
+  unsigned ssa_names_idx;
+  FOR_EACH_VEC_ELT (redundant_ssa_names, ssa_names_idx, name_pair)
+    replace_uses_by (name_pair->first, name_pair->second);
+  redundant_ssa_names.release ();
+
   todo |= do_rpo_vn (cfun, loop_preheader_edge (loop), exit_bbs);
 
   /* Delete dead predicate computations.  */

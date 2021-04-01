@@ -455,6 +455,7 @@ extern const struct processor_costs ix86_size_cost;
 #define TARGET_BTVER2 (ix86_tune == PROCESSOR_BTVER2)
 #define TARGET_ZNVER1 (ix86_tune == PROCESSOR_ZNVER1)
 #define TARGET_ZNVER2 (ix86_tune == PROCESSOR_ZNVER2)
+#define TARGET_ZNVER3 (ix86_tune == PROCESSOR_ZNVER3)
 
 /* Feature tests against the various tunings.  */
 enum ix86_tune_indices {
@@ -592,8 +593,7 @@ extern unsigned char ix86_tune_features[X86_TUNE_LAST];
 	ix86_tune_features[X86_TUNE_AVOID_FALSE_DEP_FOR_BMI]
 #define TARGET_ONE_IF_CONV_INSN \
 	ix86_tune_features[X86_TUNE_ONE_IF_CONV_INSN]
-#define TARGET_USE_XCHG_FOR_ATOMIC_STORE \
-	ix86_tune_features[X86_TUNE_USE_XCHG_FOR_ATOMIC_STORE]
+#define TARGET_AVOID_MFENCE ix86_tune_features[X86_TUNE_AVOID_MFENCE]
 #define TARGET_EMIT_VZEROUPPER \
 	ix86_tune_features[X86_TUNE_EMIT_VZEROUPPER]
 #define TARGET_EXPAND_ABS \
@@ -800,15 +800,15 @@ extern const char *host_detect_local_cpu (int argc, const char **argv);
    SFmode, DFmode and XFmode) in the current excess precision
    configuration.  */
 #define X87_ENABLE_ARITH(MODE)				\
-  (flag_unsafe_math_optimizations			\
-   || flag_excess_precision == EXCESS_PRECISION_FAST	\
+  (ix86_unsafe_math_optimizations			\
+   || ix86_excess_precision == EXCESS_PRECISION_FAST	\
    || (MODE) == XFmode)
 
 /* Likewise, whether to allow direct conversions from integer mode
    IMODE (HImode, SImode or DImode) to MODE.  */
 #define X87_ENABLE_FLOAT(MODE, IMODE)			\
-  (flag_unsafe_math_optimizations			\
-   || flag_excess_precision == EXCESS_PRECISION_FAST	\
+  (ix86_unsafe_math_optimizations			\
+   || ix86_excess_precision == EXCESS_PRECISION_FAST	\
    || (MODE) == XFmode					\
    || ((MODE) == DFmode && (IMODE) == SImode)		\
    || (IMODE) == HImode)
@@ -2351,6 +2351,7 @@ enum processor_type
   PROCESSOR_BTVER2,
   PROCESSOR_ZNVER1,
   PROCESSOR_ZNVER2,
+  PROCESSOR_ZNVER3,
   PROCESSOR_max
 };
 
@@ -2433,11 +2434,12 @@ const wide_int_bitmask PTA_RDPID (0, HOST_WIDE_INT_1U << 6);
 const wide_int_bitmask PTA_PCONFIG (0, HOST_WIDE_INT_1U << 7);
 const wide_int_bitmask PTA_WBNOINVD (0, HOST_WIDE_INT_1U << 8);
 const wide_int_bitmask PTA_AVX512VP2INTERSECT (0, HOST_WIDE_INT_1U << 9);
-const wide_int_bitmask PTA_WAITPKG (0, HOST_WIDE_INT_1U << 9);
 const wide_int_bitmask PTA_PTWRITE (0, HOST_WIDE_INT_1U << 10);
 const wide_int_bitmask PTA_AVX512BF16 (0, HOST_WIDE_INT_1U << 11);
-const wide_int_bitmask PTA_MOVDIRI(0, HOST_WIDE_INT_1U << 13);
-const wide_int_bitmask PTA_MOVDIR64B(0, HOST_WIDE_INT_1U << 14);
+const wide_int_bitmask PTA_WAITPKG (0, HOST_WIDE_INT_1U << 12);
+const wide_int_bitmask PTA_MOVDIRI (0, HOST_WIDE_INT_1U << 13);
+const wide_int_bitmask PTA_MOVDIR64B (0, HOST_WIDE_INT_1U << 14);
+const wide_int_bitmask PTA_CLDEMOTE (0, HOST_WIDE_INT_1U << 16);
 
 const wide_int_bitmask PTA_CORE2 = PTA_64BIT | PTA_MMX | PTA_SSE | PTA_SSE2
   | PTA_SSE3 | PTA_SSSE3 | PTA_CX16 | PTA_FXSR;
@@ -2450,8 +2452,8 @@ const wide_int_bitmask PTA_IVYBRIDGE = PTA_SANDYBRIDGE | PTA_FSGSBASE
   | PTA_RDRND | PTA_F16C;
 const wide_int_bitmask PTA_HASWELL = PTA_IVYBRIDGE | PTA_AVX2 | PTA_BMI
   | PTA_BMI2 | PTA_LZCNT | PTA_FMA | PTA_MOVBE | PTA_HLE;
-const wide_int_bitmask PTA_BROADWELL = PTA_HASWELL | PTA_ADX | PTA_PRFCHW
-  | PTA_RDSEED;
+const wide_int_bitmask PTA_BROADWELL = PTA_HASWELL | PTA_ADX | PTA_RDSEED
+  | PTA_PRFCHW;
 const wide_int_bitmask PTA_SKYLAKE = PTA_BROADWELL | PTA_AES | PTA_CLFLUSHOPT
   | PTA_XSAVEC | PTA_XSAVES | PTA_SGX;
 const wide_int_bitmask PTA_SKYLAKE_AVX512 = PTA_SKYLAKE | PTA_AVX512F
@@ -2464,28 +2466,31 @@ const wide_int_bitmask PTA_CANNONLAKE = PTA_SKYLAKE | PTA_AVX512F
   | PTA_AVX512VBMI | PTA_AVX512IFMA | PTA_SHA;
 const wide_int_bitmask PTA_ICELAKE_CLIENT = PTA_CANNONLAKE | PTA_AVX512VNNI
   | PTA_GFNI | PTA_VAES | PTA_AVX512VBMI2 | PTA_VPCLMULQDQ | PTA_AVX512BITALG
-  | PTA_RDPID | PTA_CLWB | PTA_AVX512VPOPCNTDQ;
+  | PTA_RDPID | PTA_AVX512VPOPCNTDQ;
 const wide_int_bitmask PTA_ICELAKE_SERVER = PTA_ICELAKE_CLIENT | PTA_PCONFIG
-  | PTA_WBNOINVD;
+  | PTA_WBNOINVD | PTA_CLWB;
 const wide_int_bitmask PTA_TIGERLAKE = PTA_ICELAKE_CLIENT | PTA_MOVDIRI
-  | PTA_MOVDIR64B | PTA_AVX512VP2INTERSECT;
+  | PTA_MOVDIR64B | PTA_CLWB | PTA_AVX512VP2INTERSECT;
 const wide_int_bitmask PTA_KNL = PTA_BROADWELL | PTA_AVX512PF | PTA_AVX512ER
-  | PTA_AVX512F | PTA_AVX512CD;
+  | PTA_AVX512F | PTA_AVX512CD | PTA_PREFETCHWT1;
 const wide_int_bitmask PTA_BONNELL = PTA_CORE2 | PTA_MOVBE;
-const wide_int_bitmask PTA_SILVERMONT = PTA_WESTMERE | PTA_MOVBE | PTA_RDRND;
+const wide_int_bitmask PTA_SILVERMONT = PTA_WESTMERE | PTA_MOVBE | PTA_RDRND
+  | PTA_PRFCHW;
 const wide_int_bitmask PTA_GOLDMONT = PTA_SILVERMONT | PTA_AES | PTA_SHA | PTA_XSAVE
   | PTA_RDSEED | PTA_XSAVEC | PTA_XSAVES | PTA_CLFLUSHOPT | PTA_XSAVEOPT
   | PTA_FSGSBASE;
 const wide_int_bitmask PTA_GOLDMONT_PLUS = PTA_GOLDMONT | PTA_RDPID
   | PTA_SGX | PTA_PTWRITE;
 const wide_int_bitmask PTA_TREMONT = PTA_GOLDMONT_PLUS | PTA_CLWB
-  | PTA_GFNI;
+  | PTA_GFNI | PTA_MOVDIRI | PTA_MOVDIR64B | PTA_CLDEMOTE | PTA_WAITPKG;
 const wide_int_bitmask PTA_KNM = PTA_KNL | PTA_AVX5124VNNIW
   | PTA_AVX5124FMAPS | PTA_AVX512VPOPCNTDQ;
 
 #ifndef GENERATOR_FILE
 
 #include "insn-attr-common.h"
+
+#include "common/config/i386/i386-cpuinfo.h"
 
 class pta
 {
@@ -2494,10 +2499,13 @@ public:
   const enum processor_type processor;
   const enum attr_cpu schedule;
   const wide_int_bitmask flags;
+  const int model;
+  const enum feature_priority priority;
 };
 
 extern const pta processor_alias_table[];
 extern int const pta_size;
+extern unsigned int const num_arch_names;
 #endif
 
 #endif
@@ -2845,6 +2853,10 @@ struct GTY(()) machine_function {
 
   /* True if the function needs a stack frame.  */
   BOOL_BITFIELD stack_frame_required : 1;
+
+  /* True if __builtin_ia32_vzeroupper () has been expanded in current
+     function.  */
+  BOOL_BITFIELD has_explicit_vzeroupper : 1;
 
   /* The largest alignment, in bytes, of stack slot actually used.  */
   unsigned int max_used_stack_alignment;

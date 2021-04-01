@@ -10,7 +10,7 @@ struct MissingRetValue {
   MissingRetValue (coro::coroutine_handle<> handle) : handle (handle) {}
   struct missing_retvoid {
     coro::suspend_never initial_suspend() { return {}; }
-    coro::suspend_never final_suspend() { return {}; }
+    coro::suspend_never final_suspend() noexcept { return {}; }
     MissingRetValue get_return_object() {
       return MissingRetValue (coro::coroutine_handle<missing_retvoid>::from_promise (*this));
     }
@@ -27,6 +27,12 @@ bar ()
 {
   co_return 6174; // { dg-error {no member named 'return_value' in} }
 }
+
+// check we have not messed up continuation of the compilation.
+template <class... Args>
+struct void_t_imp {
+  using type = void;
+};
 
 int main (int ac, char *av[]) {
   MissingRetValue x = bar ();

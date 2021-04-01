@@ -111,6 +111,12 @@ get_amd_cpu (unsigned int family, unsigned int model)
       if (model >= 0x30)
 	 __cpu_model.__cpu_subtype = AMDFAM17H_ZNVER2;
       break;
+    case 0x19:
+      __cpu_model.__cpu_type = AMDFAM19H;
+      /* AMD family 19h version 1.  */
+      if (model <= 0x0f)
+	__cpu_model.__cpu_subtype = AMDFAM19H_ZNVER3;
+      break;
     default:
       break;
     }
@@ -346,9 +352,13 @@ get_available_features (unsigned int ecx, unsigned int edx,
 	{
 	  if (ebx & bit_AVX2)
 	    set_feature (FEATURE_AVX2);
+	  if (ecx & bit_VPCLMULQDQ)
+	    set_feature (FEATURE_VPCLMULQDQ);
 	}
       if (ebx & bit_BMI2)
 	set_feature (FEATURE_BMI2);
+      if (ecx & bit_GFNI)
+	set_feature (FEATURE_GFNI);
       if (avx512_usable)
 	{
 	  if (ebx & bit_AVX512F)
@@ -371,10 +381,6 @@ get_available_features (unsigned int ecx, unsigned int edx,
 	    set_feature (FEATURE_AVX512VBMI);
 	  if (ecx & bit_AVX512VBMI2)
 	    set_feature (FEATURE_AVX512VBMI2);
-	  if (ecx & bit_GFNI)
-	    set_feature (FEATURE_GFNI);
-	  if (ecx & bit_VPCLMULQDQ)
-	    set_feature (FEATURE_VPCLMULQDQ);
 	  if (ecx & bit_AVX512VNNI)
 	    set_feature (FEATURE_AVX512VNNI);
 	  if (ecx & bit_AVX512BITALG)
@@ -385,6 +391,8 @@ get_available_features (unsigned int ecx, unsigned int edx,
 	    set_feature (FEATURE_AVX5124VNNIW);
 	  if (edx & bit_AVX5124FMAPS)
 	    set_feature (FEATURE_AVX5124FMAPS);
+	  if (edx & bit_AVX512VP2INTERSECT)
+	    set_feature (FEATURE_AVX512VP2INTERSECT);
 
 	  __cpuid_count (7, 1, eax, ebx, ecx, edx);
 	  if (eax & bit_AVX512BF16)

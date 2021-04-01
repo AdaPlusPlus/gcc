@@ -4408,6 +4408,76 @@
    (set_attr "shift" "3")
    (set_attr "type" "logic_shift_reg")])
 
+;; Custom Datapath Extension insns.
+(define_insn "arm_cx1<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+	               (match_operand:SI 2 "const_int_ccde1_operand" "i")]
+	    UNSPEC_CDE))]
+   "TARGET_CDE"
+   "cx1<cde_suffix>\\tp%c1, <cde_dest>, %2"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_cx1a<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		       (match_operand:SIDI 2 "s_register_operand" "0")
+	               (match_operand:SI 3 "const_int_ccde1_operand" "i")]
+	    UNSPEC_CDEA))]
+   "TARGET_CDE"
+   "cx1<cde_suffix>a\\tp%c1, <cde_dest>, %3"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_cx2<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		       (match_operand:SI 2 "s_register_operand" "r")
+	               (match_operand:SI 3 "const_int_ccde2_operand" "i")]
+	    UNSPEC_CDE))]
+   "TARGET_CDE"
+   "cx2<cde_suffix>\\tp%c1, <cde_dest>, %2, %3"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_cx2a<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		       (match_operand:SIDI 2 "s_register_operand" "0")
+		       (match_operand:SI 3 "s_register_operand" "r")
+	               (match_operand:SI 4 "const_int_ccde2_operand" "i")]
+	    UNSPEC_CDEA))]
+   "TARGET_CDE"
+   "cx2<cde_suffix>a\\tp%c1, <cde_dest>, %3, %4"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_cx3<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		       (match_operand:SI 2 "s_register_operand" "r")
+		       (match_operand:SI 3 "s_register_operand" "r")
+	               (match_operand:SI 4 "const_int_ccde3_operand" "i")]
+	    UNSPEC_CDE))]
+   "TARGET_CDE"
+   "cx3<cde_suffix>\\tp%c1, <cde_dest>, %2, %3, %4"
+  [(set_attr "type" "coproc")]
+)
+
+(define_insn "arm_cx3a<mode>"
+   [(set (match_operand:SIDI 0 "s_register_operand" "=r")
+	 (unspec:SIDI [(match_operand:SI 1 "const_int_coproc_operand" "i")
+		       (match_operand:SIDI 2 "s_register_operand" "0")
+		       (match_operand:SI 3 "s_register_operand" "r")
+		       (match_operand:SI 4 "s_register_operand" "r")
+                       (match_operand:SI 5 "const_int_ccde3_operand" "i")]
+	    UNSPEC_CDEA))]
+   "TARGET_CDE"
+   "cx3<cde_suffix>a\\tp%c1, <cde_dest>, %3, %4, %5"
+  [(set_attr "type" "coproc")]
+)
+
 ;; Shift and rotation insns
 
 (define_expand "ashldi3"
@@ -4422,7 +4492,8 @@
         operands[2] = force_reg (SImode, operands[2]);
 
       /* Armv8.1-M Mainline double shifts are not expanded.  */
-      if (arm_reg_or_long_shift_imm (operands[2], GET_MODE (operands[2])))
+      if (arm_reg_or_long_shift_imm (operands[2], GET_MODE (operands[2]))
+	  && (REG_P (operands[2]) || INTVAL(operands[2]) != 32))
         {
 	  if (!reg_overlap_mentioned_p(operands[0], operands[1]))
 	    emit_insn (gen_movdi (operands[0], operands[1]));
@@ -6162,6 +6233,7 @@
 	(match_operand:DI 1 "di_operand"              "rDa,Db,Dc,mi,r"))]
   "TARGET_32BIT
    && !(TARGET_HARD_FLOAT)
+   && !(TARGET_HAVE_MVE || TARGET_HAVE_MVE_FLOAT)
    && !TARGET_IWMMXT
    && (   register_operand (operands[0], DImode)
        || register_operand (operands[1], DImode))"
@@ -7217,7 +7289,9 @@
 (define_insn "*arm32_mov<mode>"
   [(set (match_operand:HFBF 0 "nonimmediate_operand" "=r,m,r,r")
 	(match_operand:HFBF 1 "general_operand"	   " m,r,r,F"))]
-  "TARGET_32BIT && !TARGET_HARD_FLOAT
+  "TARGET_32BIT
+   && !TARGET_HARD_FLOAT
+   && !TARGET_HAVE_MVE
    && (	  s_register_operand (operands[0], <MODE>mode)
        || s_register_operand (operands[1], <MODE>mode))"
   "*
@@ -7283,7 +7357,7 @@
   if (arm_disable_literal_pool
       && (REG_P (operands[0]) || SUBREG_P (operands[0]))
       && CONST_DOUBLE_P (operands[1])
-      && TARGET_HARD_FLOAT
+      && TARGET_VFP_BASE
       && !vfp3_const_double_rtx (operands[1]))
     {
       rtx clobreg = gen_reg_rtx (SFmode);
@@ -7380,7 +7454,7 @@
   if (arm_disable_literal_pool
       && (REG_P (operands[0]) || SUBREG_P (operands[0]))
       && CONSTANT_P (operands[1])
-      && TARGET_HARD_FLOAT
+      && TARGET_VFP_BASE
       && !arm_const_double_rtx (operands[1])
       && !(TARGET_VFP_DOUBLE && vfp3_const_double_rtx (operands[1])))
     {
@@ -9140,7 +9214,7 @@
 	operands[2] = operands[1];
       else
 	{
-	  rtx mem = XEXP (force_const_mem (SImode, operands[1]), 0);
+	  rtx mem = force_const_mem (SImode, operands[1]);
 	  emit_move_insn (operands[2], mem);
 	}
     }
@@ -9223,7 +9297,7 @@
 	operands[3] = operands[1];
       else
 	{
-	  rtx mem = XEXP (force_const_mem (SImode, operands[1]), 0);
+	  rtx mem = force_const_mem (SImode, operands[1]);
 	  emit_move_insn (operands[3], mem);
 	}
     }
@@ -9248,6 +9322,8 @@
   [(set_attr "arch" "t1,32")]
 )
 
+;; DO NOT SPLIT THIS PATTERN.  It is important for security reasons that the
+;; canary value does not live beyond the end of this sequence.
 (define_insn "arm_stack_protect_test_insn"
   [(set (reg:CC_Z CC_REGNUM)
 	(compare:CC_Z (unspec:SI [(match_operand:SI 1 "memory_operand" "m,m")
@@ -9257,8 +9333,8 @@
    (clobber (match_operand:SI 0 "register_operand" "=&l,&r"))
    (clobber (match_dup 2))]
   "TARGET_32BIT"
-  "ldr\t%0, [%2]\;ldr\t%2, %1\;eors\t%0, %2, %0"
-  [(set_attr "length" "8,12")
+  "ldr\t%0, [%2]\;ldr\t%2, %1\;eors\t%0, %2, %0\;mov\t%2, #0"
+  [(set_attr "length" "12,16")
    (set_attr "conds" "set")
    (set_attr "type" "multiple")
    (set_attr "arch" "t,32")]

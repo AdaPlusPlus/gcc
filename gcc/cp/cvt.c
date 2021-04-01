@@ -723,7 +723,9 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
   if (!CLASS_TYPE_P (type))
     {
       e = mark_rvalue_use (e);
-      e = scalar_constant_value (e);
+      tree v = scalar_constant_value (e);
+      if (!error_operand_p (v))
+	e = v;
     }
   if (error_operand_p (e))
     return error_mark_node;
@@ -993,9 +995,8 @@ cp_get_fndecl_from_callee (tree fn, bool fold /* = true */)
   if (TREE_CODE (fn) == FUNCTION_DECL)
     return fn;
   tree type = TREE_TYPE (fn);
-  if (type == unknown_type_node)
+  if (type == NULL_TREE || !INDIRECT_TYPE_P (type))
     return NULL_TREE;
-  gcc_assert (INDIRECT_TYPE_P (type));
   if (fold)
     fn = maybe_constant_init (fn);
   STRIP_NOPS (fn);
@@ -1221,12 +1222,14 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
     case CALL_EXPR:   /* We have a special meaning for volatile void fn().  */
       /* cdtors may return this or void, depending on
 	 targetm.cxx.cdtor_returns_this, but this shouldn't affect our
-	 decisions here: neither nodiscard warnings (nodiscard cdtors
-	 are nonsensical), nor should any constexpr or template
-	 instantiations be affected by an ABI property that is, or at
-	 least ought to be transparent to the language.  */
+	 decisions here: neither nodiscard warnings (nodiscard dtors
+	 are nonsensical and ctors have a different behavior with that
+	 attribute that is handled in the TARGET_EXPR case), nor should
+	 any constexpr or template instantiations be affected by an ABI
+	 property that is, or at least ought to be transparent to the
+	 language.  */
       if (tree fn = cp_get_callee_fndecl_nofold (expr))
-	if (DECL_DESTRUCTOR_P (fn))
+	if (DECL_CONSTRUCTOR_P (fn) || DECL_DESTRUCTOR_P (fn))
 	  return expr;
 
       if (complain & tf_warning)
@@ -1568,12 +1571,13 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 	  && warn_unused_value
 	  && !TREE_NO_WARNING (expr)
 	  && !processing_template_decl
-	  && !cp_unevaluated_operand)
+	  && !cp_unevaluated_operand
+	  && (complain & tf_warning))
 	{
 	  /* The middle end does not warn about expressions that have
 	     been explicitly cast to void, so we must do so here.  */
-	  if (!TREE_SIDE_EFFECTS (expr)) {
-            if (complain & tf_warning)
+	  if (!TREE_SIDE_EFFECTS (expr))
+	    {
 	      switch (implicit)
 		{
 		  case ICV_SECOND_OF_COND:
@@ -1605,14 +1609,10 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 		  default:
 		    gcc_unreachable ();
 		}
-          }
+	    }
 	  else
 	    {
-	      tree e;
-	      enum tree_code code;
-	      enum tree_code_class tclass;
-
-	      e = expr;
+	      tree e = expr;
 	      /* We might like to warn about (say) "(int) f()", as the
 		 cast has no effect, but the compiler itself will
 		 generate implicit conversions under some
@@ -1626,21 +1626,14 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 	      while (TREE_CODE (e) == NOP_EXPR)
 		e = TREE_OPERAND (e, 0);
 
-	      code = TREE_CODE (e);
-	      tclass = TREE_CODE_CLASS (code);
-	      if ((tclass == tcc_comparison
-		   || tclass == tcc_unary
-		   || (tclass == tcc_binary
-		       && !(code == MODIFY_EXPR
-			    || code == INIT_EXPR
-			    || code == PREDECREMENT_EXPR
-			    || code == PREINCREMENT_EXPR
-			    || code == POSTDECREMENT_EXPR
-			    || code == POSTINCREMENT_EXPR))
-		   || code == VEC_PERM_EXPR
-		   || code == VEC_COND_EXPR)
-                  && (complain & tf_warning))
-		warning_at (loc, OPT_Wunused_value, "value computed is not used");
+	      enum tree_code code = TREE_CODE (e);
+	      enum tree_code_class tclass = TREE_CODE_CLASS (code);
+	      if (tclass == tcc_comparison
+		  || tclass == tcc_unary
+		  || tclass == tcc_binary
+		  || code == VEC_PERM_EXPR
+		  || code == VEC_COND_EXPR)
+		warn_if_unused_value (e, loc);
 	    }
 	}
       expr = build1 (CONVERT_EXPR, void_type_node, expr);

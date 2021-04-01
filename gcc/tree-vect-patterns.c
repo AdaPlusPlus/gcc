@@ -1677,6 +1677,7 @@ vect_recog_over_widening_pattern (stmt_vec_info last_stmt_info, tree *type_out)
   /* Apply the minimum efficient precision we just calculated.  */
   if (new_precision < min_precision)
     new_precision = min_precision;
+  new_precision = vect_element_precision (new_precision);
   if (new_precision >= TYPE_PRECISION (type))
     return NULL;
 
@@ -2455,7 +2456,6 @@ vect_recog_rotate_pattern (stmt_vec_info stmt_vinfo, tree *type_out)
       append_pattern_def_seq (stmt_vinfo, def_stmt);
     }
   stype = TREE_TYPE (def);
-  scalar_int_mode smode = SCALAR_INT_TYPE_MODE (stype);
 
   if (TREE_CODE (def) == INTEGER_CST)
     {
@@ -2484,7 +2484,7 @@ vect_recog_rotate_pattern (stmt_vec_info stmt_vinfo, tree *type_out)
 	append_pattern_def_seq (stmt_vinfo, def_stmt, vecstype);
 
       def2 = vect_recog_temp_ssa_var (stype, NULL);
-      tree mask = build_int_cst (stype, GET_MODE_PRECISION (smode) - 1);
+      tree mask = build_int_cst (stype, GET_MODE_PRECISION (mode) - 1);
       def_stmt = gimple_build_assign (def2, BIT_AND_EXPR,
 				      gimple_assign_lhs (def_stmt), mask);
       if (ext_def)
@@ -3365,8 +3365,8 @@ vect_recog_divmod_pattern (stmt_vec_info stmt_vinfo, tree *type_out)
 	  d = abs_d;
 	  oprnd1 = build_int_cst (itype, abs_d);
 	}
-      else if (HOST_BITS_PER_WIDE_INT >= prec
-	       && abs_d == HOST_WIDE_INT_1U << (prec - 1))
+      if (HOST_BITS_PER_WIDE_INT >= prec
+	  && abs_d == HOST_WIDE_INT_1U << (prec - 1))
 	/* This case is not handled correctly below.  */
 	return NULL;
 
@@ -4025,14 +4025,18 @@ vect_recog_bool_pattern (stmt_vec_info stmt_vinfo, tree *type_out)
 
   var = gimple_assign_rhs1 (last_stmt);
   lhs = gimple_assign_lhs (last_stmt);
+  rhs_code = gimple_assign_rhs_code (last_stmt);
+
+  if (rhs_code == VIEW_CONVERT_EXPR)
+    var = TREE_OPERAND (var, 0);
 
   if (!VECT_SCALAR_BOOLEAN_TYPE_P (TREE_TYPE (var)))
     return NULL;
 
   hash_set<gimple *> bool_stmts;
 
-  rhs_code = gimple_assign_rhs_code (last_stmt);
-  if (CONVERT_EXPR_CODE_P (rhs_code))
+  if (CONVERT_EXPR_CODE_P (rhs_code)
+      || rhs_code == VIEW_CONVERT_EXPR)
     {
       if (! INTEGRAL_TYPE_P (TREE_TYPE (lhs))
 	  || TYPE_PRECISION (TREE_TYPE (lhs)) == 1)
@@ -4885,10 +4889,19 @@ vect_determine_precisions_from_users (stmt_vec_info stmt_info, gassign *stmt)
 	unsigned int const_shift = TREE_INT_CST_LOW (shift);
 	if (code == LSHIFT_EXPR)
 	  {
+	    /* Avoid creating an undefined shift.
+
+	       ??? We could instead use min_output_precision as-is and
+	       optimize out-of-range shifts to zero.  However, only
+	       degenerate testcases shift away all their useful input data,
+	       and it isn't natural to drop input operations in the middle
+	       of vectorization.  This sort of thing should really be
+	       handled before vectorization.  */
+	    operation_precision = MAX (stmt_info->min_output_precision,
+				       const_shift + 1);
 	    /* We need CONST_SHIFT fewer bits of the input.  */
-	    operation_precision = stmt_info->min_output_precision;
 	    min_input_precision = (MAX (operation_precision, const_shift)
-				    - const_shift);
+				   - const_shift);
 	  }
 	else
 	  {

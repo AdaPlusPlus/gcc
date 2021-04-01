@@ -40,6 +40,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "output.h"
 #include "file-prefix-map.h"
 #include "cgraph.h"
+#include "omp-general.h"
 
 /* Forward declarations.  */
 
@@ -226,8 +227,7 @@ genericize_if_stmt (tree *stmt_p)
     stmt = else_;
   else
     stmt = build3 (COND_EXPR, void_type_node, cond, then_, else_);
-  if (!EXPR_HAS_LOCATION (stmt))
-    protected_set_expr_location (stmt, locus);
+  protected_set_expr_location_if_unset (stmt, locus);
   *stmt_p = stmt;
 }
 
@@ -248,8 +248,7 @@ genericize_cp_loop (tree *stmt_p, location_t start_locus, tree cond, tree body,
   tree stmt_list = NULL;
   tree debug_begin = NULL;
 
-  if (EXPR_LOCATION (incr) == UNKNOWN_LOCATION)
-    protected_set_expr_location (incr, start_locus);
+  protected_set_expr_location_if_unset (incr, start_locus);
 
   cp_walk_tree (&cond, cp_genericize_r, data, NULL);
   cp_walk_tree (&incr, cp_genericize_r, data, NULL);
@@ -607,6 +606,18 @@ simple_empty_class_p (tree type, tree op, tree_code code)
       && TYPE_HAS_TRIVIAL_DESTRUCTOR (type))
     /* The TARGET_EXPR is itself a simple copy, look through it.  */
     return simple_empty_class_p (type, TARGET_EXPR_INITIAL (op), code);
+
+  if (TREE_CODE (op) == PARM_DECL
+      && TREE_ADDRESSABLE (TREE_TYPE (op)))
+    {
+      tree fn = DECL_CONTEXT (op);
+      if (DECL_THUNK_P (fn)
+	  || lambda_static_thunk_p (fn))
+	/* In a thunk, we pass through invisible reference parms, so this isn't
+	   actually a copy.  */
+	return false;
+    }
+
   return
     (TREE_CODE (op) == EMPTY_CLASS_EXPR
      || code == MODIFY_EXPR
@@ -928,6 +939,14 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	 elided by cp_gimplify_init_expr.  */
       gcc_checking_assert (!TARGET_EXPR_DIRECT_INIT_P (*expr_p));
       ret = GS_UNHANDLED;
+      break;
+
+    case PTRMEM_CST:
+      *expr_p = cplus_expand_constant (*expr_p);
+      if (TREE_CODE (*expr_p) == PTRMEM_CST)
+	ret = GS_ERROR;
+      else
+	ret = GS_OK;
       break;
 
     case RETURN_EXPR:
@@ -1647,9 +1666,70 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
       *stmt_p = genericize_spaceship (*stmt_p);
       break;
 
+    case OMP_DISTRIBUTE:
+      /* Need to explicitly instantiate copy ctors on class iterators of
+	 composite distribute parallel for.  */
+      if (OMP_FOR_INIT (*stmt_p) == NULL_TREE)
+	{
+	  tree *data[4] = { NULL, NULL, NULL, NULL };
+	  tree inner = walk_tree (&OMP_FOR_BODY (*stmt_p),
+				  find_combined_omp_for, data, NULL);
+	  if (inner != NULL_TREE
+	      && TREE_CODE (inner) == OMP_FOR)
+	    {
+	      for (int i = 0; i < TREE_VEC_LENGTH (OMP_FOR_INIT (inner)); i++)
+		if (OMP_FOR_ORIG_DECLS (inner)
+		    && TREE_CODE (TREE_VEC_ELT (OMP_FOR_ORIG_DECLS (inner),
+				  i)) == TREE_LIST
+		    && TREE_PURPOSE (TREE_VEC_ELT (OMP_FOR_ORIG_DECLS (inner),
+				     i)))
+		  {
+		    tree orig = TREE_VEC_ELT (OMP_FOR_ORIG_DECLS (inner), i);
+		    /* Class iterators aren't allowed on OMP_SIMD, so the only
+		       case we need to solve is distribute parallel for.  */
+		    gcc_assert (TREE_CODE (inner) == OMP_FOR
+				&& data[1]);
+		    tree orig_decl = TREE_PURPOSE (orig);
+		    tree c, cl = NULL_TREE;
+		    for (c = OMP_FOR_CLAUSES (inner);
+			 c; c = OMP_CLAUSE_CHAIN (c))
+		      if ((OMP_CLAUSE_CODE (c) == OMP_CLAUSE_PRIVATE
+			   || OMP_CLAUSE_CODE (c) == OMP_CLAUSE_LASTPRIVATE)
+			  && OMP_CLAUSE_DECL (c) == orig_decl)
+			{
+			  cl = c;
+			  break;
+			}
+		    if (cl == NULL_TREE)
+		      {
+			for (c = OMP_PARALLEL_CLAUSES (*data[1]);
+			     c; c = OMP_CLAUSE_CHAIN (c))
+			  if (OMP_CLAUSE_CODE (c) == OMP_CLAUSE_PRIVATE
+			      && OMP_CLAUSE_DECL (c) == orig_decl)
+			    {
+			      cl = c;
+			      break;
+			    }
+		      }
+		    if (cl)
+		      {
+			orig_decl = require_complete_type (orig_decl);
+			tree inner_type = TREE_TYPE (orig_decl);
+			if (orig_decl == error_mark_node)
+			  continue;
+			if (TYPE_REF_P (TREE_TYPE (orig_decl)))
+			  inner_type = TREE_TYPE (inner_type);
+
+			while (TREE_CODE (inner_type) == ARRAY_TYPE)
+			  inner_type = TREE_TYPE (inner_type);
+			get_copy_ctor (inner_type, tf_warning_or_error);
+		      }
+		}
+	    }
+	}
+      /* FALLTHRU */
     case OMP_FOR:
     case OMP_SIMD:
-    case OMP_DISTRIBUTE:
     case OMP_LOOP:
     case OACC_LOOP:
       genericize_omp_for_stmt (stmt_p, walk_subtrees, data);
@@ -2677,8 +2757,6 @@ cp_fold (tree x)
 	  else
 	    x = org_x;
 	}
-      if (code == MODIFY_EXPR && TREE_CODE (x) == MODIFY_EXPR)
-	TREE_THIS_VOLATILE (x) = TREE_THIS_VOLATILE (org_x);
 
       break;
 
@@ -2932,6 +3010,12 @@ cp_fold (tree x)
 
     default:
       return org_x;
+    }
+
+  if (EXPR_P (x) && TREE_CODE (x) == code)
+    {
+      TREE_THIS_VOLATILE (x) = TREE_THIS_VOLATILE (org_x);
+      TREE_NO_WARNING (x) = TREE_NO_WARNING (org_x);
     }
 
   fold_cache->put (org_x, x);

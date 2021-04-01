@@ -659,14 +659,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     : _M_dataplus(_S_construct(__s, __s + __n, __a), __a)
     { }
 
-  // TBD: DPG annotate
-  template<typename _CharT, typename _Traits, typename _Alloc>
-    basic_string<_CharT, _Traits, _Alloc>::
-    basic_string(const _CharT* __s, const _Alloc& __a)
-    : _M_dataplus(_S_construct(__s, __s ? __s + traits_type::length(__s) :
-			       __s + npos, __a), __a)
-    { }
-
   template<typename _CharT, typename _Traits, typename _Alloc>
     basic_string<_CharT, _Traits, _Alloc>::
     basic_string(size_type __n, _CharT __c, const _Alloc& __a)
@@ -1609,11 +1601,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   // Inhibit implicit instantiations for required instantiations,
   // which are defined via explicit instantiations elsewhere.
 #if _GLIBCXX_EXTERN_TEMPLATE
-  // The explicit instantiations definitions in src/c++11/string-inst.cc
-  // are compiled as C++14, so the new C++17 members aren't instantiated.
-  // Until those definitions are compiled as C++17 suppress the declaration,
-  // so C++17 code will implicitly instantiate std::string and std::wstring
-  // as needed.
+  // The explicit instantiation definitions in src/c++11/string-inst.cc and
+  // src/c++17/string-inst.cc only instantiate the members required for C++17
+  // and earlier standards (so not C++20's starts_with and ends_with).
+  // Suppress the explicit instantiation declarations for C++20, so C++20
+  // code will implicitly instantiate std::string and std::wstring as needed.
 # if __cplusplus <= 201703L && _GLIBCXX_EXTERN_TEMPLATE > 0
   extern template class basic_string<char>;
 # elif ! _GLIBCXX_USE_CXX11_ABI

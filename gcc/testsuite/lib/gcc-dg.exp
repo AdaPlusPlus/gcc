@@ -171,7 +171,7 @@ proc schedule-cleanups { opts } {
 	verbose "dg-keep-saved-temps ${keep_saved_temps_suffixes}" 2
     }
     # -save-temps -> cleanup-saved-temps()
-    if [regexp -- {(^|\s+)-save-temps(\s+|$)} $opts] {
+    if [regexp -- {(^|\s+)-?-save-temps(\s+|$)} $opts] {
 	verbose "Cleanup -save-temps seen" 4
 	if [info exists keep_saved_temps_suffixes] {
 	    append finalcode "cleanup-saved-temps ${keep_saved_temps_suffixes}\n"
@@ -477,7 +477,10 @@ proc dg-set-target-env-var { args } {
 	error "dg-set-target-env-var: need two arguments"
 	return
     }
-    lappend set_target_env_var [list [lindex $args 1] [lindex $args 2]]
+    set var [lindex $args 1]
+    set value [lindex $args 2]
+    verbose "dg-set-target-env-var $var $value" 2
+    lappend set_target_env_var [list $var $value]
 }
 
 proc set-target-env-var { } {
@@ -518,6 +521,7 @@ proc dg-set-compiler-env-var { args } {
     }
     set var [lindex $args 1]
     set value [lindex $args 2]
+    verbose "dg-set-compiler-env-var $var $value" 2
     if [info exists ::env($var)] {
       lappend saved_compiler_env_var [list $var 1 $::env($var)]
     } else {
@@ -1212,7 +1216,7 @@ proc dg-optimized { args } {
     # Make this variable available here and to the saved proc.
     upvar dg-messages dg-messages
 
-    process-message saved-dg-error "optimized: " "$args"
+    process-message saved-dg-warning "optimized:" "$args"
 }
 
 # Handle output from -fopt-info for MSG_MISSED_OPTIMIZATION:
@@ -1222,7 +1226,7 @@ proc dg-missed { args } {
     # Make this variable available here and to the saved proc.
     upvar dg-messages dg-messages
 
-    process-message saved-dg-error "missed: " "$args"
+    process-message saved-dg-warning "missed:" "$args"
 }
 
 # Check the existence of a gdb in the path, and return true if there

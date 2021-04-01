@@ -673,31 +673,13 @@ public:
 	return;
       }
 
-    /* Do not store variables we cannot take the address of,
-       but keep the values for purposes of debugging.  */
     if (!d->canTakeAddressOf ())
       {
-	/* Don't know if there is a good way to handle instantiations.  */
-	if (d->isInstantiated ())
-	  return;
-
-	/* Cannot make an expression out of a void initializer.  */
-	if (!d->_init || d->_init->isVoidInitializer ())
-	  return;
-
-	tree decl = get_symbol_decl (d);
-	Expression *ie = initializerToExpression (d->_init);
-
-	/* CONST_DECL was initially intended for enumerals and may be used for
-	   scalars in general, but not for aggregates.  Here a non-constant
-	   value is generated anyway so as the CONST_DECL only serves as a
-	   placeholder for the value, however the DECL itself should never be
-	   referenced in any generated code, or passed to the back-end.  */
+	/* Do not store variables we cannot take the address of,
+	   but keep the values for purposes of debugging.  */
 	if (!d->type->isscalar ())
-	  DECL_INITIAL (decl) = build_expr (ie, false);
-	else
 	  {
-	    DECL_INITIAL (decl) = build_expr (ie, true);
+	    tree decl = get_symbol_decl (d);
 	    d_pushdecl (decl);
 	    rest_of_decl_compilation (decl, 1, 0);
 	  }
@@ -981,11 +963,14 @@ public:
       {
 	tree resdecl = DECL_RESULT (fndecl);
 
-	TREE_TYPE (resdecl)
-	  = build_reference_type (TREE_TYPE (resdecl));
-	DECL_BY_REFERENCE (resdecl) = 1;
-	TREE_ADDRESSABLE (resdecl) = 0;
-	relayout_decl (resdecl);
+	/* Return non-trivial structs by invisible reference.  */
+	if (TREE_ADDRESSABLE (TREE_TYPE (resdecl)))
+	  {
+	    TREE_TYPE (resdecl) = build_reference_type (TREE_TYPE (resdecl));
+	    DECL_BY_REFERENCE (resdecl) = 1;
+	    TREE_ADDRESSABLE (resdecl) = 0;
+	    relayout_decl (resdecl);
+	  }
 
 	if (d->nrvo_var)
 	  {
@@ -995,7 +980,9 @@ public:
 	    DECL_NAME (resdecl) = DECL_NAME (var);
 	    /* Don't forget that we take its address.  */
 	    TREE_ADDRESSABLE (var) = 1;
-	    resdecl = build_deref (resdecl);
+
+	    if (DECL_BY_REFERENCE (resdecl))
+	      resdecl = build_deref (resdecl);
 
 	    SET_DECL_VALUE_EXPR (var, resdecl);
 	    DECL_HAS_VALUE_EXPR_P (var) = 1;
@@ -1138,6 +1125,25 @@ get_symbol_decl (Declaration *decl)
 
       if (vd->storage_class & STCextern)
 	DECL_EXTERNAL (decl->csym) = 1;
+
+      /* CONST_DECL was initially intended for enumerals and may be used for
+	 scalars in general, but not for aggregates.  Here a non-constant
+	 value is generated anyway so as the CONST_DECL only serves as a
+	 placeholder for the value, however the DECL itself should never be
+	 referenced in any generated code, or passed to the back-end.  */
+      if (vd->storage_class & STCmanifest)
+	{
+	  /* Cannot make an expression out of a void initializer.  */
+	  if (vd->_init && !vd->_init->isVoidInitializer ())
+	    {
+	      Expression *ie = initializerToExpression (vd->_init);
+
+	      if (!vd->type->isscalar ())
+		DECL_INITIAL (decl->csym) = build_expr (ie, false);
+	      else
+		DECL_INITIAL (decl->csym) = build_expr (ie, true);
+	    }
+	}
     }
 
   /* Set the declaration mangled identifier if static.  */
@@ -1276,6 +1282,13 @@ get_symbol_decl (Declaration *decl)
 	  DECL_DECLARED_INLINE_P (decl->csym) = 1;
 	  DECL_NO_INLINE_WARNING_P (decl->csym) = 1;
 	}
+
+      /* In [pragma/inline], functions decorated with 'pragma(inline)' affects
+	 whether they are inlined or not.  */
+      if (fd->inlining == PINLINEalways)
+	DECL_DECLARED_INLINE_P (decl->csym) = 1;
+      else if (fd->inlining == PINLINEnever)
+	DECL_UNINLINABLE (decl->csym) = 1;
 
       /* Function was declared 'naked'.  */
       if (fd->naked)
@@ -1498,6 +1511,11 @@ get_decl_tree (Declaration *decl)
 
       AggregateDeclaration *ad = fd->isThis ();
       gcc_assert (ad != NULL);
+
+      /* The parent function is for the same `this' declaration we are
+	 building a chain to.  Non-local declaration is inaccessible.  */
+      if (fd->vthis == vd)
+	return error_no_frame_access (fd);
 
       t = get_decl_tree (fd->vthis);
       Dsymbol *outer = fd;

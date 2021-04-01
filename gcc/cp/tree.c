@@ -779,7 +779,15 @@ build_vec_init_expr (tree type, tree init, tsubst_flags_t complain)
 {
   tree slot;
   bool value_init = false;
-  tree elt_init = build_vec_init_elt (type, init, complain);
+  tree elt_init;
+  if (init && TREE_CODE (init) == CONSTRUCTOR)
+    {
+      gcc_assert (!BRACE_ENCLOSED_INITIALIZER_P (init));
+      /* We built any needed constructor calls in digest_init.  */
+      elt_init = init;
+    }
+  else
+    elt_init = build_vec_init_elt (type, init, complain);
 
   if (init == void_type_node)
     {
@@ -2780,9 +2788,10 @@ verify_stmt_tree (tree t)
   cp_walk_tree (&t, verify_stmt_tree_r, &statements, NULL);
 }
 
-/* Check if the type T depends on a type with no linkage and if so, return
-   it.  If RELAXED_P then do not consider a class type declared within
-   a vague-linkage function to have no linkage.  */
+/* Check if the type T depends on a type with no linkage and if so,
+   return it.  If RELAXED_P then do not consider a class type declared
+   within a vague-linkage function to have no linkage.  Remember:
+   no-linkage is not the same as internal-linkage*/
 
 tree
 no_linkage_check (tree t, bool relaxed_p)
@@ -2800,17 +2809,6 @@ no_linkage_check (tree t, bool relaxed_p)
     {
       tree extra = LAMBDA_TYPE_EXTRA_SCOPE (t);
       if (!extra)
-	return t;
-
-      /* If the mangling scope is internal-linkage or not repeatable
-	 elsewhere, the lambda effectively has no linkage.  (Sadly
-	 we're not very careful with the linkages of types.)  */
-      if (TREE_CODE (extra) == VAR_DECL
-	  && !(TREE_PUBLIC (extra)
-	       && (processing_template_decl
-		   || (DECL_LANG_SPECIFIC (extra) && DECL_USE_TEMPLATE (extra))
-		   /* DECL_COMDAT is set too late for us to check.  */
-		   || DECL_VAR_DECLARED_INLINE_P (extra))))
 	return t;
     }
 
@@ -3022,6 +3020,48 @@ bot_manip (tree* tp, int* walk_subtrees, void* data_)
 			     (splay_tree_key)*tp,
 			     (splay_tree_value)*tp);
 	}
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*tp) == DECL_EXPR
+      && VAR_P (DECL_EXPR_DECL (*tp))
+      && DECL_ARTIFICIAL (DECL_EXPR_DECL (*tp))
+      && !TREE_STATIC (DECL_EXPR_DECL (*tp)))
+    {
+      tree t;
+      splay_tree_node n
+	= splay_tree_lookup (target_remap,
+			     (splay_tree_key) DECL_EXPR_DECL (*tp));
+      if (n)
+	t = (tree) n->value;
+      else
+	{
+	  t = create_temporary_var (TREE_TYPE (DECL_EXPR_DECL (*tp)));
+	  DECL_INITIAL (t) = DECL_INITIAL (DECL_EXPR_DECL (*tp));
+	  splay_tree_insert (target_remap,
+			     (splay_tree_key) DECL_EXPR_DECL (*tp),
+			     (splay_tree_value) t);
+	}
+      copy_tree_r (tp, walk_subtrees, NULL);
+      DECL_EXPR_DECL (*tp) = t;
+      if (data.clear_location && EXPR_HAS_LOCATION (*tp))
+	SET_EXPR_LOCATION (*tp, input_location);
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*tp) == BIND_EXPR && BIND_EXPR_VARS (*tp))
+    {
+      copy_tree_r (tp, walk_subtrees, NULL);
+      for (tree *p = &BIND_EXPR_VARS (*tp); *p; p = &DECL_CHAIN (*p))
+	{
+	  gcc_assert (VAR_P (*p) && DECL_ARTIFICIAL (*p) && !TREE_STATIC (*p));
+	  tree t = create_temporary_var (TREE_TYPE (*p));
+	  DECL_INITIAL (t) = DECL_INITIAL (*p);
+	  DECL_CHAIN (t) = DECL_CHAIN (*p);
+	  splay_tree_insert (target_remap, (splay_tree_key) *p,
+			     (splay_tree_value) t);
+	  *p = t;
+	}
+      if (data.clear_location && EXPR_HAS_LOCATION (*tp))
+	SET_EXPR_LOCATION (*tp, input_location);
       return NULL_TREE;
     }
 
@@ -3247,7 +3287,7 @@ replace_placeholders (tree exp, tree obj, bool *seen_p /*= NULL*/)
 
   /* If the object isn't a (member of a) class, do nothing.  */
   tree op0 = obj;
-  while (TREE_CODE (op0) == COMPONENT_REF)
+  while (handled_component_p (op0))
     op0 = TREE_OPERAND (op0, 0);
   if (!CLASS_TYPE_P (strip_array_types (TREE_TYPE (op0))))
     return exp;
@@ -3730,11 +3770,12 @@ cp_tree_equal (tree t1, tree t2)
 	 up for expressions that involve 'this' in a member function
 	 template.  */
 
-      if (comparing_specializations && !CONSTRAINT_VAR_P (t1))
+      if (comparing_specializations
+	  && DECL_CONTEXT (t1) != DECL_CONTEXT (t2))
 	/* When comparing hash table entries, only an exact match is
 	   good enough; we don't want to replace 'this' with the
 	   version from another function.  But be more flexible
-	   with local parameters in a requires-expression.  */
+	   with parameters with identical contexts.  */
 	return false;
 
       if (same_type_p (TREE_TYPE (t1), TREE_TYPE (t2)))
@@ -3777,8 +3818,11 @@ cp_tree_equal (tree t1, tree t2)
 			      TREE_TYPE (TEMPLATE_PARM_DECL (t2))));
 
     case TEMPLATE_ID_EXPR:
-      return (cp_tree_equal (TREE_OPERAND (t1, 0), TREE_OPERAND (t2, 0))
-	      && cp_tree_equal (TREE_OPERAND (t1, 1), TREE_OPERAND (t2, 1)));
+      if (!cp_tree_equal (TREE_OPERAND (t1, 0), TREE_OPERAND (t2, 0)))
+	return false;
+      if (!comp_template_args (TREE_OPERAND (t1, 1), TREE_OPERAND (t2, 1)))
+	return false;
+      return true;
 
     case CONSTRAINT_INFO:
       return cp_tree_equal (CI_ASSOCIATED_CONSTRAINTS (t1),
@@ -3814,6 +3858,8 @@ cp_tree_equal (tree t1, tree t2)
 	    if (SIZEOF_EXPR_TYPE_P (t2))
 	      o2 = TREE_TYPE (o2);
 	  }
+	else if (ALIGNOF_EXPR_STD_P (t1) != ALIGNOF_EXPR_STD_P (t2))
+	  return false;
 
 	if (TREE_CODE (o1) != TREE_CODE (o2))
 	  return false;
@@ -3908,6 +3954,15 @@ cp_tree_equal (tree t1, tree t2)
 	return true;
       }
 
+    case EXPR_PACK_EXPANSION:
+      if (!cp_tree_equal (PACK_EXPANSION_PATTERN (t1),
+			  PACK_EXPANSION_PATTERN (t2)))
+	return false;
+      if (!comp_template_args (PACK_EXPANSION_EXTRA_ARGS (t1),
+			       PACK_EXPANSION_EXTRA_ARGS (t2)))
+	return false;
+      return true;
+
     default:
       break;
     }
@@ -3922,14 +3977,12 @@ cp_tree_equal (tree t1, tree t2)
     case tcc_reference:
     case tcc_statement:
       {
-	int i, n;
-
-	n = cp_tree_operand_length (t1);
+	int n = cp_tree_operand_length (t1);
 	if (TREE_CODE_CLASS (code1) == tcc_vl_exp
 	    && n != TREE_OPERAND_LENGTH (t2))
 	  return false;
 
-	for (i = 0; i < n; ++i)
+	for (int i = 0; i < n; ++i)
 	  if (!cp_tree_equal (TREE_OPERAND (t1, i), TREE_OPERAND (t2, i)))
 	    return false;
 
@@ -3938,9 +3991,11 @@ cp_tree_equal (tree t1, tree t2)
 
     case tcc_type:
       return same_type_p (t1, t2);
+
     default:
       gcc_unreachable ();
     }
+
   /* We can get here with --disable-checking.  */
   return false;
 }
@@ -4472,6 +4527,33 @@ zero_init_p (const_tree t)
   return 1;
 }
 
+/* Returns true if the expression or initializer T is the result of
+   zero-initialization for its type, taking pointers to members
+   into consideration.  */
+
+bool
+zero_init_expr_p (tree t)
+{
+  tree type = TREE_TYPE (t);
+  if (!type || uses_template_parms (type))
+    return false;
+  if (zero_init_p (type))
+    return initializer_zerop (t);
+  if (TYPE_PTRMEM_P (type))
+    return null_member_pointer_value_p (t);
+  if (TREE_CODE (t) == CONSTRUCTOR
+      && CP_AGGREGATE_TYPE_P (type))
+    {
+      tree elt_init;
+      unsigned HOST_WIDE_INT i;
+      FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (t), i, elt_init)
+	if (!zero_init_expr_p (elt_init))
+	  return false;
+      return true;
+    }
+  return false;
+}
+
 /* True IFF T is a C++20 structural type (P1907R1) that can be used as a
    non-type template parameter.  If EXPLAIN, explain why not.  */
 
@@ -4982,12 +5064,15 @@ cp_walk_subtrees (tree *tp, int *walk_subtrees_p, walk_tree_fn func,
   result = NULL_TREE;
   switch (code)
     {
+    case TEMPLATE_TYPE_PARM:
+      if (template_placeholder_p (*tp))
+	WALK_SUBTREE (CLASS_PLACEHOLDER_TEMPLATE (*tp));
+      /* Fall through.  */
     case DEFERRED_PARSE:
     case TEMPLATE_TEMPLATE_PARM:
     case BOUND_TEMPLATE_TEMPLATE_PARM:
     case UNBOUND_CLASS_TEMPLATE:
     case TEMPLATE_PARM_INDEX:
-    case TEMPLATE_TYPE_PARM:
     case TYPENAME_TYPE:
     case TYPEOF_TYPE:
     case UNDERLYING_TYPE:
@@ -5738,76 +5823,6 @@ maybe_warn_zero_as_null_pointer_constant (tree expr, location_t loc)
       return true;
     }
   return false;
-}
-
-/* Given an initializer INIT for a TYPE, return true if INIT is zero
-   so that it can be replaced by value initialization.  This function
-   distinguishes betwen empty strings as initializers for arrays and
-   for pointers (which make it return false).  */
-
-bool
-type_initializer_zero_p (tree type, tree init)
-{
-  if (type == error_mark_node || init == error_mark_node)
-    return false;
-
-  STRIP_NOPS (init);
-
-  if (POINTER_TYPE_P (type))
-    return TREE_CODE (init) != STRING_CST && initializer_zerop (init);
-
-  if (TREE_CODE (init) != CONSTRUCTOR)
-    {
-      /* A class can only be initialized by a non-class type if it has
-	 a ctor that converts from that type.  Such classes are excluded
-	 since their semantics are unknown.  */
-      if (RECORD_OR_UNION_TYPE_P (type)
-	  && !RECORD_OR_UNION_TYPE_P (TREE_TYPE (init)))
-	return false;
-      return initializer_zerop (init);
-    }
-
-  if (TREE_CODE (type) == ARRAY_TYPE)
-    {
-      tree elt_type = TREE_TYPE (type);
-      elt_type = TYPE_MAIN_VARIANT (elt_type);
-      if (elt_type == char_type_node)
-	return initializer_zerop (init);
-
-      tree elt_init;
-      unsigned HOST_WIDE_INT i;
-      FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (init), i, elt_init)
-	if (!type_initializer_zero_p (elt_type, elt_init))
-	  return false;
-      return true;
-    }
-
-  if (TREE_CODE (type) != RECORD_TYPE)
-    return initializer_zerop (init);
-
-  if (TYPE_NON_AGGREGATE_CLASS (type))
-    return false;
-
-  tree fld = TYPE_FIELDS (type);
-
-  tree fld_init;
-  unsigned HOST_WIDE_INT i;
-  FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (init), i, fld_init)
-    {
-      fld = next_initializable_field (fld);
-      if (!fld)
-	return true;
-
-      tree fldtype = TREE_TYPE (fld);
-      if (!type_initializer_zero_p (fldtype, fld_init))
-	return false;
-
-      fld = DECL_CHAIN (fld);
-      if (!fld)
-	break;
-    }
-
-  return true;
 }
 
 #if defined ENABLE_TREE_CHECKING && (GCC_VERSION >= 2007)

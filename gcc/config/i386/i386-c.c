@@ -128,6 +128,10 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
       def_or_undef (parse_in, "__znver2");
       def_or_undef (parse_in, "__znver2__");
       break;
+    case PROCESSOR_ZNVER3:
+      def_or_undef (parse_in, "__znver3");
+      def_or_undef (parse_in, "__znver3__");
+      break;
     case PROCESSOR_BTVER1:
       def_or_undef (parse_in, "__btver1");
       def_or_undef (parse_in, "__btver1__");
@@ -305,6 +309,9 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
       break;
     case PROCESSOR_ZNVER2:
       def_or_undef (parse_in, "__tune_znver2__");
+      break;
+    case PROCESSOR_ZNVER3:
+      def_or_undef (parse_in, "__tune_znver3__");
       break;
     case PROCESSOR_BTVER1:
       def_or_undef (parse_in, "__tune_btver1__");
@@ -697,6 +704,8 @@ ix86_target_macros (void)
       cpp_assert (parse_in, "cpu=i386");
       cpp_assert (parse_in, "machine=i386");
       builtin_define_std ("i386");
+      cpp_define (parse_in, "_ILP32");
+      cpp_define (parse_in, "__ILP32__");
     }
 
   if (!TARGET_80387)

@@ -68,6 +68,7 @@
 #include "tree-vrp.h"
 #include "tree-ssanames.h"
 #include "targhooks.h"
+#include "opts.h"
 
 #include "rs6000-internal.h"
 
@@ -90,6 +91,12 @@
 #define TARGET_NO_PROTOTYPE 0
 #endif
 
+struct builtin_compatibility
+{
+  const enum rs6000_builtins code;
+  const char *const name;
+};
+
 struct builtin_description
 {
   const HOST_WIDE_INT mask;
@@ -104,6 +111,7 @@ static const struct
   const char *cpu;
   unsigned int cpuid;
 } cpu_is_info[] = {
+  { "power10",	   PPC_PLATFORM_POWER10 },
   { "power9",	   PPC_PLATFORM_POWER9 },
   { "power8",	   PPC_PLATFORM_POWER8 },
   { "power7",	   PPC_PLATFORM_POWER7 },
@@ -171,7 +179,9 @@ static const struct
   { "arch_3_00",	PPC_FEATURE2_ARCH_3_00,		1 },
   { "ieee128",		PPC_FEATURE2_HAS_IEEE128,	1 },
   { "darn",		PPC_FEATURE2_DARN,		1 },
-  { "scv",		PPC_FEATURE2_SCV,		1 }
+  { "scv",		PPC_FEATURE2_SCV,		1 },
+  { "arch_3_1",		PPC_FEATURE2_ARCH_3_1,		1 },
+  { "mma",		PPC_FEATURE2_MMA,		1 },
 };
 
 static void altivec_init_builtins (void);
@@ -180,6 +190,7 @@ static tree builtin_function_type (machine_mode, machine_mode,
 				   enum rs6000_builtins, const char *name);
 static void rs6000_common_init_builtins (void);
 static void htm_init_builtins (void);
+static void mma_init_builtins (void);
 
 
 /* Hash table to keep track of the argument types for builtin functions.  */
@@ -239,6 +250,7 @@ builtin_hasher::equal (builtin_hash_struct *p1, builtin_hash_struct *p2)
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -261,6 +273,9 @@ builtin_hasher::equal (builtin_hash_struct *p1, builtin_hash_struct *p2)
   { NAME, ICODE, MASK, ATTR },
 
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)  \
+  { NAME, ICODE, MASK, ATTR },
+
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)  \
   { NAME, ICODE, MASK, ATTR },
 
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)  \
@@ -288,6 +303,7 @@ static const struct rs6000_builtin_info_type rs6000_builtin_info[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -1971,6 +1987,8 @@ const struct altivec_builtin_types altivec_overloaded_builtins[] = {
 
   { P9V_BUILTIN_VEC_CONVERT_4F32_8I16, P9V_BUILTIN_CONVERT_4F32_8I16,
     RS6000_BTI_unsigned_V8HI, RS6000_BTI_V4SF, RS6000_BTI_V4SF, 0 },
+  { P9V_BUILTIN_VEC_CONVERT_4F32_8F16, P9V_BUILTIN_CONVERT_4F32_8F16,
+    RS6000_BTI_unsigned_V8HI, RS6000_BTI_V4SF, RS6000_BTI_V4SF, 0 },
 
   { P9V_BUILTIN_VEC_VFIRSTMATCHINDEX, P9V_BUILTIN_VFIRSTMATCHINDEX_V16QI,
     RS6000_BTI_UINTSI, RS6000_BTI_V16QI, RS6000_BTI_V16QI, 0 },
@@ -3072,6 +3090,12 @@ const struct altivec_builtin_types altivec_overloaded_builtins[] = {
     RS6000_BTI_unsigned_V4SI, RS6000_BTI_unsigned_V8HI, RS6000_BTI_unsigned_V8HI, RS6000_BTI_unsigned_V4SI },
   { ALTIVEC_BUILTIN_VEC_MSUM, ALTIVEC_BUILTIN_VMSUMSHM,
     RS6000_BTI_V4SI, RS6000_BTI_V8HI, RS6000_BTI_V8HI, RS6000_BTI_V4SI },
+
+  { ALTIVEC_BUILTIN_VEC_MSUM, ALTIVEC_BUILTIN_VMSUMUDM,
+    RS6000_BTI_V1TI, RS6000_BTI_V2DI, RS6000_BTI_V2DI, RS6000_BTI_V1TI },
+  { ALTIVEC_BUILTIN_VEC_MSUM, ALTIVEC_BUILTIN_VMSUMUDM,
+    RS6000_BTI_unsigned_V1TI, RS6000_BTI_unsigned_V2DI, RS6000_BTI_unsigned_V2DI, RS6000_BTI_unsigned_V1TI },
+
   { ALTIVEC_BUILTIN_VEC_VMSUMSHM, ALTIVEC_BUILTIN_VMSUMSHM,
     RS6000_BTI_V4SI, RS6000_BTI_V8HI, RS6000_BTI_V8HI, RS6000_BTI_V4SI },
   { ALTIVEC_BUILTIN_VEC_VMSUMUHM, ALTIVEC_BUILTIN_VMSUMUHM,
@@ -5528,7 +5552,8 @@ const struct altivec_builtin_types altivec_overloaded_builtins[] = {
    sub-tree.  */
 
 static int
-rs6000_aggregate_candidate (const_tree type, machine_mode *modep)
+rs6000_aggregate_candidate (const_tree type, machine_mode *modep,
+			    int *empty_base_seen)
 {
   machine_mode mode;
   HOST_WIDE_INT size;
@@ -5598,7 +5623,8 @@ rs6000_aggregate_candidate (const_tree type, machine_mode *modep)
 	    || TREE_CODE (TYPE_SIZE (type)) != INTEGER_CST)
 	  return -1;
 
-	count = rs6000_aggregate_candidate (TREE_TYPE (type), modep);
+	count = rs6000_aggregate_candidate (TREE_TYPE (type), modep,
+					    empty_base_seen);
 	if (count == -1
 	    || !index
 	    || !TYPE_MAX_VALUE (index)
@@ -5636,7 +5662,18 @@ rs6000_aggregate_candidate (const_tree type, machine_mode *modep)
 	    if (TREE_CODE (field) != FIELD_DECL)
 	      continue;
 
-	    sub_count = rs6000_aggregate_candidate (TREE_TYPE (field), modep);
+	    if (DECL_FIELD_ABI_IGNORED (field))
+	      {
+		if (lookup_attribute ("no_unique_address",
+				      DECL_ATTRIBUTES (field)))
+		  *empty_base_seen |= 2;
+		else
+		  *empty_base_seen |= 1;
+		continue;
+	      }
+
+	    sub_count = rs6000_aggregate_candidate (TREE_TYPE (field), modep,
+						    empty_base_seen);
 	    if (sub_count < 0)
 	      return -1;
 	    count += sub_count;
@@ -5669,7 +5706,8 @@ rs6000_aggregate_candidate (const_tree type, machine_mode *modep)
 	    if (TREE_CODE (field) != FIELD_DECL)
 	      continue;
 
-	    sub_count = rs6000_aggregate_candidate (TREE_TYPE (field), modep);
+	    sub_count = rs6000_aggregate_candidate (TREE_TYPE (field), modep,
+						    empty_base_seen);
 	    if (sub_count < 0)
 	      return -1;
 	    count = count > sub_count ? count : sub_count;
@@ -5710,7 +5748,9 @@ rs6000_discover_homogeneous_aggregate (machine_mode mode, const_tree type,
       && AGGREGATE_TYPE_P (type))
     {
       machine_mode field_mode = VOIDmode;
-      int field_count = rs6000_aggregate_candidate (type, &field_mode);
+      int empty_base_seen = 0;
+      int field_count = rs6000_aggregate_candidate (type, &field_mode,
+						    &empty_base_seen);
 
       if (field_count > 0)
 	{
@@ -5725,6 +5765,27 @@ rs6000_discover_homogeneous_aggregate (machine_mode mode, const_tree type,
 		*elt_mode = field_mode;
 	      if (n_elts)
 		*n_elts = field_count;
+	      if (empty_base_seen && warn_psabi)
+		{
+		  static unsigned last_reported_type_uid;
+		  unsigned uid = TYPE_UID (TYPE_MAIN_VARIANT (type));
+		  if (uid != last_reported_type_uid)
+		    {
+		      const char *url
+			= CHANGES_ROOT_URL "gcc-10/changes.html#empty_base";
+		      if (empty_base_seen & 1)
+			inform (input_location,
+				"parameter passing for argument of type %qT "
+				"when C++17 is enabled changed to match C++14 "
+				"%{in GCC 10.1%}", type, url);
+		      else
+			inform (input_location,
+				"parameter passing for argument of type %qT "
+				"with %<[[no_unique_address]]%> members "
+				"changed %{in GCC 10.1%}", type, url);
+		      last_reported_type_uid = uid;
+		    }
+		}
 	      return true;
 	    }
 	}
@@ -6021,8 +6082,30 @@ machine_mode
 rs6000_promote_function_mode (const_tree type ATTRIBUTE_UNUSED,
 			      machine_mode mode,
 			      int *punsignedp ATTRIBUTE_UNUSED,
-			      const_tree, int)
+			      const_tree, int for_return)
 {
+  /* Warning: this is a static local variable and not always NULL!
+     This function is called multiple times for the same function
+     and return value.  PREV_FUNC is used to keep track of the
+     first time we encounter a function's return value in order
+     to not report an error with that return value multiple times.  */
+  static struct function *prev_func = NULL;
+
+  /* We do not allow MMA types being used as return values.  Only report
+     the invalid return value usage the first time we encounter it.  */
+  if (for_return
+      && prev_func != cfun
+      && (mode == POImode || mode == PXImode))
+    {
+      /* Record we have now handled function CFUN, so the next time we
+	 are called, we do not re-report the same error.  */
+      prev_func = cfun;
+      if (TYPE_CANONICAL (type) != NULL_TREE)
+	type = TYPE_CANONICAL (type);
+      error ("invalid use of MMA type %qs as a function return value",
+	     IDENTIFIER_POINTER (DECL_NAME (TYPE_NAME (type))));
+    }
+
   PROMOTE_MODE (mode, *punsignedp, type);
 
   return mode;
@@ -6972,6 +7055,16 @@ rs6000_function_arg (cumulative_args_t cum_v, const function_arg_info &arg)
   enum rs6000_abi abi = DEFAULT_ABI;
   machine_mode elt_mode;
   int n_elts;
+
+  /* We do not allow MMA types being used as function arguments.  */
+  if (mode == POImode || mode == PXImode)
+    {
+      if (TYPE_CANONICAL (type) != NULL_TREE)
+	type = TYPE_CANONICAL (type);
+      error ("invalid use of MMA operand of type %qs as a function parameter",
+	     IDENTIFIER_POINTER (DECL_NAME (TYPE_NAME (type))));
+      return NULL_RTX;
+    }
 
   /* Return a marker to indicate whether CR1 needs to set or clear the
      bit that V.4 uses to say fp args were passed in registers.
@@ -8201,6 +8294,9 @@ def_builtin (const char *name, tree type, enum rs6000_builtins code)
 	  attr_string = ", fp, const";
 	}
     }
+  else if ((classify & (RS6000_BTC_QUAD | RS6000_BTC_PAIR)) != 0)
+    /* The function uses a register quad and/or pair.  Nothing to do.  */
+    ;
   else if ((classify & RS6000_BTC_ATTR_MASK) != 0)
     gcc_unreachable ();
 
@@ -8208,6 +8304,13 @@ def_builtin (const char *name, tree type, enum rs6000_builtins code)
     fprintf (stderr, "rs6000_builtin, code = %4d, %s%s\n",
 	     (int)code, name, attr_string);
 }
+
+static const struct builtin_compatibility bdesc_compat[] =
+{
+#define RS6000_BUILTIN_COMPAT
+#include "rs6000-builtin.def"
+};
+#undef RS6000_BUILTIN_COMPAT
 
 /* Simple ternary operations: VECd = foo (VECa, VECb, VECc).  */
 
@@ -8218,6 +8321,7 @@ def_builtin (const char *name, tree type, enum rs6000_builtins code)
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8230,6 +8334,7 @@ def_builtin (const char *name, tree type, enum rs6000_builtins code)
 #define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8247,6 +8352,7 @@ static const struct builtin_description bdesc_3arg[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8259,6 +8365,7 @@ static const struct builtin_description bdesc_3arg[] =
   { MASK, ICODE, NAME, ENUM },
 
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8276,6 +8383,7 @@ static const struct builtin_description bdesc_dst[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8288,6 +8396,7 @@ static const struct builtin_description bdesc_dst[] =
 #define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8303,6 +8412,7 @@ static const struct builtin_description bdesc_2arg[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8313,6 +8423,7 @@ static const struct builtin_description bdesc_2arg[] =
 #define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE) \
   { MASK, ICODE, NAME, ENUM },
 
@@ -8334,6 +8445,7 @@ static const struct builtin_description bdesc_altivec_preds[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8346,6 +8458,7 @@ static const struct builtin_description bdesc_altivec_preds[] =
 
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8364,6 +8477,7 @@ static const struct builtin_description bdesc_abs[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8376,6 +8490,7 @@ static const struct builtin_description bdesc_abs[] =
 #define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8393,6 +8508,7 @@ static const struct builtin_description bdesc_1arg[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8405,6 +8521,7 @@ static const struct builtin_description bdesc_1arg[] =
 #define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8421,6 +8538,7 @@ static const struct builtin_description bdesc_0arg[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
 #undef RS6000_BUILTIN_X
 
@@ -8433,6 +8551,7 @@ static const struct builtin_description bdesc_0arg[] =
 #define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE) \
   { MASK, ICODE, NAME, ENUM },
 
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
 #define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
 
@@ -8441,6 +8560,7 @@ static const struct builtin_description bdesc_htm[] =
 #include "rs6000-builtin.def"
 };
 
+/* MMA builtins.  */
 #undef RS6000_BUILTIN_0
 #undef RS6000_BUILTIN_1
 #undef RS6000_BUILTIN_2
@@ -8448,7 +8568,40 @@ static const struct builtin_description bdesc_htm[] =
 #undef RS6000_BUILTIN_A
 #undef RS6000_BUILTIN_D
 #undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
 #undef RS6000_BUILTIN_P
+#undef RS6000_BUILTIN_X
+
+#define RS6000_BUILTIN_0(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_1(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_2(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_3(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_4(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_A(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_D(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_H(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_M(ENUM, NAME, MASK, ATTR, ICODE) \
+  { MASK, ICODE, NAME, ENUM },
+
+#define RS6000_BUILTIN_P(ENUM, NAME, MASK, ATTR, ICODE)
+#define RS6000_BUILTIN_X(ENUM, NAME, MASK, ATTR, ICODE)
+
+static const struct builtin_description bdesc_mma[] =
+{
+#include "rs6000-builtin.def"
+};
+
+#undef RS6000_BUILTIN_0
+#undef RS6000_BUILTIN_1
+#undef RS6000_BUILTIN_2
+#undef RS6000_BUILTIN_3
+#undef RS6000_BUILTIN_4
+#undef RS6000_BUILTIN_A
+#undef RS6000_BUILTIN_D
+#undef RS6000_BUILTIN_H
+#undef RS6000_BUILTIN_M
+#undef RS6000_BUILTIN_P
+#undef RS6000_BUILTIN_X
 
 /* Return true if a builtin function is overloaded.  */
 bool
@@ -9178,6 +9331,133 @@ altivec_expand_stv_builtin (enum insn_code icode, tree exp)
   return NULL_RTX;
 }
 
+/* Expand the MMA built-in in EXP.
+   Store true in *EXPANDEDP if we found a built-in to expand.  */
+
+static rtx
+mma_expand_builtin (tree exp, rtx target, bool *expandedp)
+{
+  unsigned i;
+  tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
+  enum rs6000_builtins fcode
+    = (enum rs6000_builtins) DECL_MD_FUNCTION_CODE (fndecl);
+  const struct builtin_description *d = bdesc_mma;
+
+  /* Expand the MMA built-in.  */
+  for (i = 0; i < ARRAY_SIZE (bdesc_mma); i++, d++)
+    if (d->code == fcode)
+      break;
+
+  if (i >= ARRAY_SIZE (bdesc_mma))
+    {
+      *expandedp = false;
+      return NULL_RTX;
+    }
+
+  *expandedp = true;
+
+  tree arg;
+  call_expr_arg_iterator iter;
+  enum insn_code icode = d->icode;
+  const struct insn_operand_data *insn_op;
+  rtx op[MAX_MMA_OPERANDS];
+  unsigned nopnds = 0;
+  unsigned attr = rs6000_builtin_info[fcode].attr;
+  bool void_func = (attr & RS6000_BTC_VOID);
+  machine_mode tmode = VOIDmode;
+
+  if (TREE_TYPE (TREE_TYPE (fndecl)) != void_type_node)
+    {
+      tmode = insn_data[icode].operand[0].mode;
+      if (!target
+	  || GET_MODE (target) != tmode
+	  || !(*insn_data[icode].operand[0].predicate) (target, tmode))
+	target = gen_reg_rtx (tmode);
+      op[nopnds++] = target;
+    }
+  else
+    target = const0_rtx;
+
+  FOR_EACH_CALL_EXPR_ARG (arg, iter, exp)
+    {
+      if (arg == error_mark_node)
+	return const0_rtx;
+
+      rtx opnd;
+      insn_op = &insn_data[icode].operand[nopnds];
+      if (TREE_CODE (arg) == ADDR_EXPR
+	  && MEM_P (DECL_RTL (TREE_OPERAND (arg, 0))))
+	opnd = DECL_RTL (TREE_OPERAND (arg, 0));
+      else
+	opnd = expand_normal (arg);
+
+      if (!(*insn_op->predicate) (opnd, insn_op->mode))
+	{
+	  if (!strcmp (insn_op->constraint, "n"))
+	    {
+	      if (!CONST_INT_P (opnd))
+		error ("argument %d must be an unsigned literal", nopnds);
+	      else
+		error ("argument %d is an unsigned literal that is "
+		       "out of range", nopnds);
+	      return const0_rtx;
+	    }
+	  opnd = copy_to_mode_reg (insn_op->mode, opnd);
+	}
+
+      /* Some MMA instructions have INOUT accumulator operands, so force
+	 their target register to be the same as their input register.  */
+      if (!void_func
+	  && nopnds == 1
+	  && !strcmp (insn_op->constraint, "0")
+	  && insn_op->mode == tmode
+	  && REG_P (opnd)
+	  && (*insn_data[icode].operand[0].predicate) (opnd, tmode))
+	target = op[0] = opnd;
+
+      op[nopnds++] = opnd;
+    }
+
+  unsigned attr_args = attr & RS6000_BTC_OPND_MASK;
+  if (attr & RS6000_BTC_QUAD)
+    attr_args++;
+
+  gcc_assert (nopnds == attr_args);
+
+  rtx pat;
+  switch (nopnds)
+    {
+    case 1:
+      pat = GEN_FCN (icode) (op[0]);
+      break;
+    case 2:
+      pat = GEN_FCN (icode) (op[0], op[1]);
+      break;
+    case 3:
+      pat = GEN_FCN (icode) (op[0], op[1], op[2]);
+      break;
+    case 4:
+      pat = GEN_FCN (icode) (op[0], op[1], op[2], op[3]);
+      break;
+    case 5:
+      pat = GEN_FCN (icode) (op[0], op[1], op[2], op[3], op[4]);
+      break;
+    case 6:
+      pat = GEN_FCN (icode) (op[0], op[1], op[2], op[3], op[4], op[5]);
+      break;
+    case 7:
+      pat = GEN_FCN (icode) (op[0], op[1], op[2], op[3], op[4], op[5], op[6]);
+      break;
+    default:
+      gcc_unreachable ();
+    }
+  if (!pat)
+    return NULL_RTX;
+  emit_insn (pat);
+
+  return target;
+}
+
 /* Return the appropriate SPR number associated with the given builtin.  */
 static inline HOST_WIDE_INT
 htm_spr_num (enum rs6000_builtins code)
@@ -9324,11 +9604,11 @@ htm_expand_builtin (tree exp, rtx target, bool * expandedp)
 	if (flag_checking)
 	  {
 	    int expected_nopnds = 0;
-	    if ((attr & RS6000_BTC_TYPE_MASK) == RS6000_BTC_UNARY)
+	    if ((attr & RS6000_BTC_OPND_MASK) == RS6000_BTC_UNARY)
 	      expected_nopnds = 1;
-	    else if ((attr & RS6000_BTC_TYPE_MASK) == RS6000_BTC_BINARY)
+	    else if ((attr & RS6000_BTC_OPND_MASK) == RS6000_BTC_BINARY)
 	      expected_nopnds = 2;
-	    else if ((attr & RS6000_BTC_TYPE_MASK) == RS6000_BTC_TERNARY)
+	    else if ((attr & RS6000_BTC_OPND_MASK) == RS6000_BTC_TERNARY)
 	      expected_nopnds = 3;
 	    if (!(attr & RS6000_BTC_VOID))
 	      expected_nopnds += 1;
@@ -10342,6 +10622,10 @@ rs6000_invalid_builtin (enum rs6000_builtins fncode)
 	   "-m64");
   else if ((fnmask & RS6000_BTM_P9_MISC) == RS6000_BTM_P9_MISC)
     error ("%qs requires the %qs option", name, "-mcpu=power9");
+  else if ((fnmask & RS6000_BTM_P10) != 0)
+    error ("%qs requires the %qs option", name, "-mcpu=power10");
+  else if ((fnmask & RS6000_BTM_MMA) != 0)
+    error ("%qs requires the %qs option", name, "-mmma");
   else if ((fnmask & RS6000_BTM_LDBL128) == RS6000_BTM_LDBL128)
     {
       if (!TARGET_HARD_FLOAT)
@@ -10385,6 +10669,10 @@ rs6000_fold_builtin (tree fndecl ATTRIBUTE_UNUSED,
 static bool
 rs6000_builtin_valid_without_lhs (enum rs6000_builtins fn_code)
 {
+  /* Check for built-ins explicitly marked as a void function.  */
+  if (rs6000_builtin_info[fn_code].attr & RS6000_BTC_VOID)
+    return true;
+
   switch (fn_code)
     {
     case ALTIVEC_BUILTIN_STVX_V16QI:
@@ -10528,6 +10816,159 @@ fold_mergeeo_helper (gimple_stmt_iterator *gsi, gimple *stmt, int use_odd)
   gsi_replace (gsi, g, true);
 }
 
+/* Expand the MMA built-ins early, so that we can convert the pass-by-reference
+   __vector_quad arguments into pass-by-value arguments, leading to more
+   efficient code generation.  */
+
+bool
+rs6000_gimple_fold_mma_builtin (gimple_stmt_iterator *gsi)
+{
+  gimple *stmt = gsi_stmt (*gsi);
+  tree fndecl = gimple_call_fndecl (stmt);
+  enum rs6000_builtins fncode
+    = (enum rs6000_builtins) DECL_MD_FUNCTION_CODE (fndecl);
+  unsigned attr = rs6000_builtin_info[fncode].attr;
+
+  if ((attr & RS6000_BTC_GIMPLE) == 0)
+    return false;
+
+  unsigned nopnds = (attr & RS6000_BTC_OPND_MASK);
+  gimple_seq new_seq = NULL;
+  gimple *new_call;
+  tree new_decl;
+
+  if (rs6000_builtin_info[fncode + 1].icode == CODE_FOR_nothing)
+    {
+      /* This is an MMA disassemble built-in function.  */
+      gcc_assert (fncode == MMA_BUILTIN_DISASSEMBLE_ACC
+		  || fncode == VSX_BUILTIN_DISASSEMBLE_PAIR);
+
+      push_gimplify_context (true);
+      tree dst_ptr = gimple_call_arg (stmt, 0);
+      tree src_ptr = gimple_call_arg (stmt, 1);
+      tree src_type = TREE_TYPE (src_ptr);
+      tree src = make_ssa_name (TREE_TYPE (src_type));
+      gimplify_assign (src, build_simple_mem_ref (src_ptr), &new_seq);
+
+      /* If we are disassembling an accumulator/pair and our destination is
+	 another accumulator/pair, then just copy the entire thing as is.  */
+      if ((fncode == MMA_BUILTIN_DISASSEMBLE_ACC
+	   && TREE_TYPE (TREE_TYPE (dst_ptr)) == vector_quad_type_node)
+	  || (fncode == VSX_BUILTIN_DISASSEMBLE_PAIR
+	      && TREE_TYPE (TREE_TYPE (dst_ptr)) == vector_pair_type_node))
+	{
+	  tree dst = build_simple_mem_ref (build1 (VIEW_CONVERT_EXPR,
+						   src_type, dst_ptr));
+	  gimplify_assign (dst, src, &new_seq);
+	  pop_gimplify_context (NULL);
+	  gsi_replace_with_seq (gsi, new_seq, true);
+	  return true;
+	}
+
+      /* We're disassembling an accumulator into a different type, so we need
+	 to emit a xxmfacc instruction now, since we cannot do it later.  */
+      if (fncode == MMA_BUILTIN_DISASSEMBLE_ACC)
+	{
+	  new_decl = rs6000_builtin_decls[MMA_BUILTIN_XXMFACC_INTERNAL];
+	  new_call = gimple_build_call (new_decl, 1, src);
+	  src = make_ssa_name (vector_quad_type_node);
+	  gimple_call_set_lhs (new_call, src);
+	  gimple_seq_add_stmt (&new_seq, new_call);
+	}
+
+      /* Copy the accumulator/pair vector by vector.  */
+      unsigned nvecs = (fncode == MMA_BUILTIN_DISASSEMBLE_ACC) ? 4 : 2;
+      tree dst_type = build_pointer_type_for_mode (unsigned_V16QI_type_node,
+						   ptr_mode, true);
+      tree dst_base = build1 (VIEW_CONVERT_EXPR, dst_type, dst_ptr);
+      tree array_type = build_array_type_nelts (unsigned_V16QI_type_node, nvecs);
+      tree src_array = build1 (VIEW_CONVERT_EXPR, array_type, src);
+      for (unsigned i = 0; i < nvecs; i++)
+	{
+	  unsigned index = WORDS_BIG_ENDIAN ? i : nvecs - 1 - i;
+	  tree ref = build4 (ARRAY_REF, unsigned_V16QI_type_node, src_array,
+			     build_int_cst (size_type_node, i),
+			     NULL_TREE, NULL_TREE);
+	  tree dst = build2 (MEM_REF, unsigned_V16QI_type_node, dst_base,
+			     build_int_cst (dst_type, index * 16));
+	  gimplify_assign (dst, ref, &new_seq);
+	}
+      pop_gimplify_context (NULL);
+      gsi_replace_with_seq (gsi, new_seq, true);
+      return true;
+    }
+
+  /* Convert this built-in into an internal version that uses pass-by-value
+     arguments.  The internal built-in follows immediately after this one.  */
+  new_decl = rs6000_builtin_decls[fncode + 1];
+  tree lhs, op[MAX_MMA_OPERANDS];
+  tree acc = gimple_call_arg (stmt, 0);
+  push_gimplify_context (true);
+
+  if ((attr & RS6000_BTC_QUAD) != 0)
+    {
+      /* This built-in has a pass-by-reference accumulator input, so load it
+	 into a temporary accumulator for use as a pass-by-value input.  */
+      op[0] = make_ssa_name (vector_quad_type_node);
+      for (unsigned i = 1; i < nopnds; i++)
+	op[i] = gimple_call_arg (stmt, i);
+      gimplify_assign (op[0], build_simple_mem_ref (acc), &new_seq);
+    }
+  else
+    {
+      /* This built-in does not use its pass-by-reference accumulator argument
+	 as an input argument, so remove it from the input list.  */
+      nopnds--;
+      for (unsigned i = 0; i < nopnds; i++)
+	op[i] = gimple_call_arg (stmt, i + 1);
+    }
+
+  switch (nopnds)
+    {
+    case 0:
+      new_call = gimple_build_call (new_decl, 0);
+      break;
+    case 1:
+      new_call = gimple_build_call (new_decl, 1, op[0]);
+      break;
+    case 2:
+      new_call = gimple_build_call (new_decl, 2, op[0], op[1]);
+      break;
+    case 3:
+      new_call = gimple_build_call (new_decl, 3, op[0], op[1], op[2]);
+      break;
+    case 4:
+      new_call = gimple_build_call (new_decl, 4, op[0], op[1], op[2], op[3]);
+      break;
+    case 5:
+      new_call = gimple_build_call (new_decl, 5, op[0], op[1], op[2], op[3],
+				    op[4]);
+      break;
+    case 6:
+      new_call = gimple_build_call (new_decl, 6, op[0], op[1], op[2], op[3],
+				    op[4], op[5]);
+      break;
+    case 7:
+      new_call = gimple_build_call (new_decl, 7, op[0], op[1], op[2], op[3],
+				    op[4], op[5], op[6]);
+      break;
+    default:
+      gcc_unreachable ();
+    }
+
+  if (fncode == VSX_BUILTIN_ASSEMBLE_PAIR)
+    lhs = make_ssa_name (vector_pair_type_node);
+  else
+    lhs = make_ssa_name (vector_quad_type_node);
+  gimple_call_set_lhs (new_call, lhs);
+  gimple_seq_add_stmt (&new_seq, new_call);
+  gimplify_assign (build_simple_mem_ref (acc), lhs, &new_seq);
+  pop_gimplify_context (NULL);
+  gsi_replace_with_seq (gsi, new_seq, true);
+
+  return true;
+}
+
 /* Fold a machine-dependent built-in in GIMPLE.  (For folding into
    a constant, use rs6000_fold_builtin.)  */
 
@@ -10563,10 +11004,11 @@ rs6000_gimple_fold_builtin (gimple_stmt_iterator *gsi)
     return false;
 
   /* Don't fold invalid builtins, let rs6000_expand_builtin diagnose it.  */
-  HOST_WIDE_INT mask = rs6000_builtin_info[uns_fncode].mask;
-  bool func_valid_p = (rs6000_builtin_mask & mask) == mask;
-  if (!func_valid_p)
+  if (!rs6000_builtin_is_supported_p (fn_code))
     return false;
+
+  if (rs6000_gimple_fold_mma_builtin (gsi))
+    return true;
 
   switch (fn_code)
     {
@@ -11701,6 +12143,13 @@ rs6000_expand_builtin (tree exp, rtx target, rtx subtarget ATTRIBUTE_UNUSED,
       break;
     }
 
+  if (TARGET_MMA)
+    {
+      ret = mma_expand_builtin (exp, target, &success);
+
+      if (success)
+	return ret;
+    }
   if (TARGET_ALTIVEC)
     {
       ret = altivec_expand_builtin (exp, target, &success);
@@ -11716,7 +12165,7 @@ rs6000_expand_builtin (tree exp, rtx target, rtx subtarget ATTRIBUTE_UNUSED,
 	return ret;
     }  
 
-  unsigned attr = rs6000_builtin_info[uns_fcode].attr & RS6000_BTC_TYPE_MASK;
+  unsigned attr = rs6000_builtin_info[uns_fcode].attr & RS6000_BTC_OPND_MASK;
   /* RS6000_BTC_SPECIAL represents no-operand operators.  */
   gcc_assert (attr == RS6000_BTC_UNARY
 	      || attr == RS6000_BTC_BINARY
@@ -11780,7 +12229,7 @@ rs6000_init_builtins (void)
 
   V2DI_type_node = rs6000_vector_type (TARGET_POWERPC64 ? "__vector long"
 				       : "__vector long long",
-				       intDI_type_node, 2);
+				       long_long_integer_type_node, 2);
   V2DF_type_node = rs6000_vector_type ("__vector double", double_type_node, 2);
   V4SI_type_node = rs6000_vector_type ("__vector signed int",
 				       intSI_type_node, 4);
@@ -11799,7 +12248,7 @@ rs6000_init_builtins (void)
   unsigned_V2DI_type_node = rs6000_vector_type (TARGET_POWERPC64
 				       ? "__vector unsigned long"
 				       : "__vector unsigned long long",
-				       unsigned_intDI_type_node, 2);
+				       long_long_unsigned_type_node, 2);
 
   opaque_V4SI_type_node = build_opaque_vector_type (intSI_type_node, 4);
 
@@ -11892,6 +12341,24 @@ rs6000_init_builtins (void)
   else
     ieee128_float_type_node = ibm128_float_type_node = long_double_type_node;
 
+  /* Vector pair and vector quad support.  */
+  if (TARGET_EXTRA_BUILTINS)
+    {
+      vector_pair_type_node = make_unsigned_type (256);
+      SET_TYPE_ALIGN (vector_pair_type_node, 256);
+      SET_TYPE_MODE (vector_pair_type_node, POImode);
+      layout_type (vector_pair_type_node);
+      lang_hooks.types.register_builtin_type (vector_pair_type_node,
+					      "__vector_pair");
+
+      vector_quad_type_node = make_unsigned_type (512);
+      SET_TYPE_ALIGN (vector_quad_type_node, 512);
+      SET_TYPE_MODE (vector_quad_type_node, PXImode);
+      layout_type (vector_quad_type_node);
+      lang_hooks.types.register_builtin_type (vector_quad_type_node,
+					      "__vector_quad");
+    }
+
   /* Initialize the modes for builtin_function_type, mapping a machine mode to
      tree type node.  */
   builtin_mode_to_type[QImode][0] = integer_type_node;
@@ -11921,6 +12388,8 @@ rs6000_init_builtins (void)
   builtin_mode_to_type[V8HImode][1] = unsigned_V8HI_type_node;
   builtin_mode_to_type[V16QImode][0] = V16QI_type_node;
   builtin_mode_to_type[V16QImode][1] = unsigned_V16QI_type_node;
+  builtin_mode_to_type[POImode][1] = vector_pair_type_node;
+  builtin_mode_to_type[PXImode][1] = vector_quad_type_node;
 
   tdecl = add_builtin_type ("__bool char", bool_char_type_node);
   TYPE_NAME (bool_char_type_node) = tdecl;
@@ -11947,11 +12416,14 @@ rs6000_init_builtins (void)
   pixel_V8HI_type_node = rs6000_vector_type ("__vector __pixel",
 					     pixel_type_node, 8);
 
-  /* Create Altivec and VSX builtins on machines with at least the
+  /* Create Altivec, VSX and MMA builtins on machines with at least the
      general purpose extensions (970 and newer) to allow the use of
      the target attribute.  */
   if (TARGET_EXTRA_BUILTINS)
-    altivec_init_builtins ();
+    {
+      altivec_init_builtins ();
+      mma_init_builtins ();
+    }
   if (TARGET_HTM)
     htm_init_builtins ();
 
@@ -12032,14 +12504,44 @@ rs6000_init_builtins (void)
   def_builtin ("__builtin_cpu_is", ftype, RS6000_BUILTIN_CPU_IS);
   def_builtin ("__builtin_cpu_supports", ftype, RS6000_BUILTIN_CPU_SUPPORTS);
 
-  /* AIX libm provides clog as __clog.  */
-  if (TARGET_XCOFF &&
-      (tdecl = builtin_decl_explicit (BUILT_IN_CLOG)) != NULL_TREE)
-    set_user_assembler_name (tdecl, "__clog");
+  if (TARGET_XCOFF)
+    {
+      /* AIX libm provides clog as __clog.  */
+      if ((tdecl = builtin_decl_explicit (BUILT_IN_CLOG)) != NULL_TREE)
+	set_user_assembler_name (tdecl, "__clog");
+
+      /* When long double is 64 bit, some long double builtins of libc
+	 functions (like __builtin_frexpl) must call the double version
+	 (frexp) not the long double version (frexpl) that expects a 128 bit
+	 argument.  */
+      if (! TARGET_LONG_DOUBLE_128)
+	{
+	  if ((tdecl = builtin_decl_explicit (BUILT_IN_FMODL)) != NULL_TREE)
+	    set_user_assembler_name (tdecl, "fmod");
+	  if ((tdecl = builtin_decl_explicit (BUILT_IN_FREXPL)) != NULL_TREE)
+	    set_user_assembler_name (tdecl, "frexp");
+	  if ((tdecl = builtin_decl_explicit (BUILT_IN_LDEXPL)) != NULL_TREE)
+	    set_user_assembler_name (tdecl, "ldexp");
+	  if ((tdecl = builtin_decl_explicit (BUILT_IN_MODFL)) != NULL_TREE)
+	    set_user_assembler_name (tdecl, "modf");
+	}
+    }
 
 #ifdef SUBTARGET_INIT_BUILTINS
   SUBTARGET_INIT_BUILTINS;
 #endif
+
+  /* Register the compatibility builtins after all of the normal
+     builtins have been defined.  */
+  const struct builtin_compatibility *d = bdesc_compat;
+  unsigned i;
+  for (i = 0; i < ARRAY_SIZE (bdesc_compat); i++, d++)
+    {
+      tree decl = rs6000_builtin_decls[(int)d->code];
+      if (decl != NULL)
+	add_builtin_function (d->name, TREE_TYPE (decl), (int)d->code,
+			      BUILT_IN_MD, NULL, NULL_TREE);
+    }
 }
 
 /* Returns the rs6000 builtin decl for CODE.  */
@@ -12120,6 +12622,10 @@ altivec_init_builtins (void)
   tree opaque_ftype_long_pcvoid
     = build_function_type_list (opaque_V4SI_type_node,
 				long_integer_type_node, pcvoid_type_node,
+				NULL_TREE);
+  tree v16qi_ftype_pcvoid
+    = build_function_type_list (V16QI_type_node,
+				pcvoid_type_node,
 				NULL_TREE);
   tree v16qi_ftype_long_pcvoid
     = build_function_type_list (V16QI_type_node,
@@ -12523,7 +13029,7 @@ altivec_init_builtins (void)
      targetm.vectorize.builtin_mask_for_load.  */
 
   decl = add_builtin_function ("__builtin_altivec_mask_for_load",
-			       v16qi_ftype_long_pcvoid,
+			       v16qi_ftype_pcvoid,
 			       ALTIVEC_BUILTIN_MASK_FOR_LOAD,
 			       BUILT_IN_MD, NULL, NULL_TREE);
   TREE_READONLY (decl) = 1;
@@ -12660,6 +13166,111 @@ altivec_init_builtins (void)
 }
 
 static void
+mma_init_builtins (void)
+{
+  const struct builtin_description *d = bdesc_mma;
+
+  for (unsigned i = 0; i < ARRAY_SIZE (bdesc_mma); i++, d++)
+    {
+      tree op[MAX_MMA_OPERANDS], type;
+      unsigned icode = (unsigned) d->icode;
+      unsigned attr = rs6000_builtin_info[d->code].attr;
+      int attr_args = (attr & RS6000_BTC_OPND_MASK);
+      bool gimple_func = (attr & RS6000_BTC_GIMPLE);
+      unsigned nopnds = 0;
+
+      if (d->name == 0)
+	{
+	  if (TARGET_DEBUG_BUILTIN)
+	    fprintf (stderr, "mma_builtin, bdesc_mma[%ld] no name\n",
+		     (long unsigned) i);
+	  continue;
+	}
+
+      if (gimple_func)
+	{
+	  gcc_assert (icode == CODE_FOR_nothing);
+	  op[nopnds++] = void_type_node;
+	  /* Some MMA built-ins that are expanded into gimple are converted
+	     into internal MMA built-ins that are expanded into rtl.
+	     The internal built-in follows immediately after this built-in.  */
+	  icode = d[1].icode;
+	}
+      else
+	{
+	  if ((attr & RS6000_BTC_QUAD) == 0)
+	    attr_args--;
+
+	  /* Ensure we have the correct number and type of operands.  */
+	  gcc_assert (attr_args == insn_data[icode].n_operands - 1);
+	}
+
+      if (icode == CODE_FOR_nothing)
+	{
+	  /* This is a disassemble MMA built-in function.  */
+	  gcc_assert (attr_args == RS6000_BTC_BINARY
+		      && (d->code == MMA_BUILTIN_DISASSEMBLE_ACC
+			  || d->code == VSX_BUILTIN_DISASSEMBLE_PAIR));
+	  op[nopnds++] = build_pointer_type (void_type_node);
+	  if (attr & RS6000_BTC_QUAD)
+	    op[nopnds++] = build_pointer_type (vector_quad_type_node);
+	  else
+	    op[nopnds++] = build_pointer_type (vector_pair_type_node);
+	}
+      else
+	{
+	  /* This is a normal MMA built-in function.  */
+	  unsigned j = (attr & RS6000_BTC_QUAD) ? 1 : 0;
+	  for (; j < insn_data[icode].n_operands; j++)
+	    {
+	      machine_mode mode = insn_data[icode].operand[j].mode;
+	      if (gimple_func && mode == PXImode)
+		op[nopnds++] = build_pointer_type (vector_quad_type_node);
+	      else if (gimple_func && mode == POImode
+		       && d->code == VSX_BUILTIN_ASSEMBLE_PAIR)
+		op[nopnds++] = build_pointer_type (vector_pair_type_node);
+	      else
+		/* MMA uses unsigned types.  */
+		op[nopnds++] = builtin_mode_to_type[mode][1];
+	    }
+	}
+
+      switch (nopnds)
+	{
+	case 1:
+	  type = build_function_type_list (op[0], NULL_TREE);
+	  break;
+	case 2:
+	  type = build_function_type_list (op[0], op[1], NULL_TREE);
+	  break;
+	case 3:
+	  type = build_function_type_list (op[0], op[1], op[2], NULL_TREE);
+	  break;
+	case 4:
+	  type = build_function_type_list (op[0], op[1], op[2], op[3],
+					   NULL_TREE);
+	  break;
+	case 5:
+	  type = build_function_type_list (op[0], op[1], op[2], op[3], op[4],
+					   NULL_TREE);
+	  break;
+	case 6:
+	  type = build_function_type_list (op[0], op[1], op[2], op[3], op[4],
+					   op[5], NULL_TREE);
+	  break;
+	case 7:
+	  type = build_function_type_list (op[0], op[1], op[2], op[3], op[4],
+					   op[5], op[6], NULL_TREE);
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+
+      def_builtin (d->name, type, d->code);
+    }
+}
+
+static void
 htm_init_builtins (void)
 {
   HOST_WIDE_INT builtin_mask = rs6000_builtin_mask;
@@ -12673,7 +13284,7 @@ htm_init_builtins (void)
       HOST_WIDE_INT mask = d->mask;
       unsigned attr = rs6000_builtin_info[d->code].attr;
       bool void_func = (attr & RS6000_BTC_VOID);
-      int attr_args = (attr & RS6000_BTC_TYPE_MASK);
+      int attr_args = (attr & RS6000_BTC_OPND_MASK);
       int nopnds = 0;
       tree gpr_type_node;
       tree rettype;
@@ -12799,6 +13410,8 @@ builtin_function_type (machine_mode mode_ret, machine_mode mode_arg0,
     case P8V_BUILTIN_VGBBD:
     case MISC_BUILTIN_CDTBCD:
     case MISC_BUILTIN_CBCDTD:
+    case P10V_BUILTIN_XVCVSPBF16:
+    case P10V_BUILTIN_XVCVBF16SPN:
       h.uns_p[0] = 1;
       h.uns_p[1] = 1;
       break;

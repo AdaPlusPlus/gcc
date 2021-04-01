@@ -1228,6 +1228,7 @@ gfc_trans_sync (gfc_code *code, gfc_exec_op type)
   if (code->expr1 && (gfc_option.rtcheck & GFC_RTCHECK_BOUNDS)
       && code->expr1->rank == 0)
     {
+      tree images2 = fold_convert (integer_type_node, images);
       tree cond;
       if (flag_coarray != GFC_FCOARRAY_LIB)
 	cond = fold_build2_loc (input_location, NE_EXPR, logical_type_node,
@@ -1239,7 +1240,7 @@ gfc_trans_sync (gfc_code *code, gfc_exec_op type)
 				     2, integer_zero_node,
 				     build_int_cst (integer_type_node, -1));
 	  cond = fold_build2_loc (input_location, GT_EXPR, logical_type_node,
-				  images, tmp);
+				  images2, tmp);
 	  cond2 = fold_build2_loc (input_location, LT_EXPR, logical_type_node,
 				   images,
 				   build_int_cst (TREE_TYPE (images), 1));
@@ -1248,8 +1249,7 @@ gfc_trans_sync (gfc_code *code, gfc_exec_op type)
 	}
       gfc_trans_runtime_check (true, false, cond, &se.pre,
 			       &code->expr1->where, "Invalid image number "
-			       "%d in SYNC IMAGES",
-			       fold_convert (integer_type_node, images));
+			       "%d in SYNC IMAGES", images2);
     }
 
   /* Per F2008, 8.5.1, a SYNC MEMORY is implied by calling the
@@ -3921,9 +3921,10 @@ check_forall_dependencies (gfc_code *c, stmtblock_t *pre, stmtblock_t *post)
      point to the copy instead.  Note that the shallow copy of
      the variable will not suffice for derived types with
      pointer components.  We therefore leave these to their
-     own devices.  */
+     own devices.  Likewise for allocatable components.  */
   if (lsym->ts.type == BT_DERIVED
-	&& lsym->ts.u.derived->attr.pointer_comp)
+      && (lsym->ts.u.derived->attr.pointer_comp
+	  || lsym->ts.u.derived->attr.alloc_comp))
     return need_temp;
 
   new_symtree = NULL;
@@ -6972,7 +6973,7 @@ gfc_trans_allocate (gfc_code * code)
 	  gfc_expr *init_expr = gfc_expr_to_initialize (expr);
 	  gfc_expr *rhs = e3rhs ? e3rhs : gfc_copy_expr (code->expr3);
 	  flag_realloc_lhs = 0;
-	  tmp = gfc_trans_assignment (init_expr, rhs, false, false, true,
+	  tmp = gfc_trans_assignment (init_expr, rhs, true, false, true,
 				      false);
 	  flag_realloc_lhs = realloc_lhs;
 	  /* Free the expression allocated for init_expr.  */

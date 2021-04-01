@@ -3001,8 +3001,15 @@ handle_assume_aligned_attribute (tree *node, tree name, tree args, int,
       if (!tree_fits_shwi_p (val))
 	{
 	  warning (OPT_Wattributes,
-		   "%qE attribute %E is not an integer constant",
+		   "%qE attribute argument %E is not an integer constant",
 		   name, val);
+	  *no_add_attrs = true;
+	  return NULL_TREE;
+	}
+      else if (tree_int_cst_sgn (val) < 0)
+	{
+	  warning (OPT_Wattributes,
+		   "%qE attribute argument %E is not positive", name, val);
 	  *no_add_attrs = true;
 	  return NULL_TREE;
 	}
@@ -3021,7 +3028,7 @@ handle_assume_aligned_attribute (tree *node, tree name, tree args, int,
 
 	  align = val;
 	}
-      else if (tree_int_cst_sgn (val) < 0 || tree_int_cst_le (align, val))
+      else if (tree_int_cst_le (align, val))
 	{
 	  /* The misalignment specified by the second argument
 	     must be non-negative and less than the alignment.  */
@@ -3314,7 +3321,7 @@ find_tm_attribute (tree list)
 {
   for (; list ; list = TREE_CHAIN (list))
     {
-      tree name = TREE_PURPOSE (list);
+      tree name = get_attribute_name (list);
       if (tm_attr_to_mask (name) != 0)
 	return name;
     }
