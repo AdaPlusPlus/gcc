@@ -137,19 +137,17 @@ package body Ch3 is
       --  For colon, assume it means := unless it is at the end of
       --  a line, in which case guess that it means a semicolon.
 
-      if Token = Tok_Colon then
-         if Token_Is_At_End_Of_Line then
-            T_Semicolon;
-            return Empty;
-         end if;
-
-      --  Here if := or something that we will take as equivalent
-
-      elsif Token = Tok_Colon_Equal
+      if Token = Tok_Colon_Equal
         or else Token = Tok_Equal
         or else Token = Tok_Is
+        or else Token = Tok_Colon
       then
          null;
+         if Token = Tok_Colon and then Token_Is_At_End_Of_Line then
+         --   T_Semicolon;
+         --   return Empty;
+            null;
+         end if;
 
       --  Another possibility. If we have a literal followed by a semicolon,
       --  we assume that we have a missing colon-equal.
@@ -3345,6 +3343,10 @@ package body Ch3 is
          Scopes (Scope.Last).Junk := (Token /= Tok_Record);
 
          T_Record;
+
+         if Token = Tok_Left_Curly then
+            Scan;
+         end if;
 
          Set_Component_List (Rec_Node, P_Component_List);
 

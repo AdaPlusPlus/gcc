@@ -132,7 +132,7 @@ package Opt is
 
    --  WARNING: There is a matching C declaration of this type in fe.h
 
-   Ada_Version_Default : constant Ada_Version_Type := Ada_2012;
+   Ada_Version_Default : constant Ada_Version_Type := Ada_2020;
    pragma Warnings (Off, Ada_Version_Default);
    --  GNAT
    --  Default Ada version if no switch given. The Warnings off is to kill
@@ -668,7 +668,7 @@ package Opt is
    --  Set to True to convert nonbinary modular additions into code
    --  that relies on the front-end expansion of operator Mod.
 
-   Extensions_Allowed : Boolean := False;
+   Extensions_Allowed : Boolean := True;
    --  GNAT
    --  Set to True by switch -gnatX if GNAT specific language extensions
    --  are allowed. Currently there are no such defined extensions.

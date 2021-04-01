@@ -96,7 +96,6 @@ package Scans is
       Tok_Apostrophe,      -- '            Namext
 
       Tok_Left_Bracket,    -- [            Namest
-      Tok_Left_Curly,      -- {            Namext
       Tok_Left_Paren,      -- (            Namext, Consk
 
       Tok_Delta,           -- DELTA        Atkwd, Sterm, Consk
@@ -104,7 +103,6 @@ package Scans is
       Tok_Range,           -- RANGE        Atkwd, Sterm, Consk
 
       Tok_Right_Paren,     -- )            Sterm
-      Tok_Right_Curly,     -- }            Sterm
       Tok_Right_Bracket,   -- ]            Sterm
       Tok_Comma,           -- ,            Sterm
 
@@ -157,6 +155,7 @@ package Scans is
       Tok_Else,            -- ELSE         Eterm, Sterm, After_SM
       Tok_Elsif,           -- ELSIF        Eterm, Sterm, After_SM
       Tok_End,             -- END          Eterm, Sterm, After_SM
+      Tok_Right_Curly,     -- }            Eterm, Sterm, After_SM
       Tok_Exception,       -- EXCEPTION    Eterm, Sterm, After_SM
       Tok_Exit,            -- EXIT         Eterm, Sterm, After_SM
       Tok_Goto,            -- GOTO         Eterm, Sterm, After_SM
@@ -170,6 +169,7 @@ package Scans is
       Tok_When,            -- WHEN         Eterm, Sterm, After_SM
 
       Tok_Begin,           -- BEGIN        Eterm, Sterm, After_SM, Labeled_Stmt
+      Tok_Left_Curly,      -- {            Eterm, Sterm, After_SM, Labeled_Stmt
       Tok_Declare,         -- DECLARE      Eterm, Sterm, After_SM, Labeled_Stmt
       Tok_For,             -- FOR          Eterm, Sterm, After_SM, Labeled_Stmt
       Tok_Loop,            -- LOOP         Eterm, Sterm, After_SM, Labeled_Stmt

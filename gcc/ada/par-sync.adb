@@ -274,7 +274,10 @@ package body Sync is
 
          --  Done if we are at THEN or LOOP
 
-         elsif Token = Tok_Then or else Token = Tok_Loop then
+         elsif Token = Tok_Then
+           or else Token = Tok_Left_Curly
+           or else Token = Tok_Loop
+         then
             exit;
 
          --  Otherwise keep going

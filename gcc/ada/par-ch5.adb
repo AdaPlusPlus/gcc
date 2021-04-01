@@ -28,6 +28,7 @@ pragma Style_Checks (All_Checks);
 --  section rather than alphabetical.
 
 with Sinfo.CN; use Sinfo.CN;
+with Uintp;
 
 separate (Par)
 package body Ch5 is
@@ -176,6 +177,8 @@ package body Ch5 is
       Id_Node        : Node_Id;
       Name_Node      : Node_Id;
 
+      Is_Plus_Plus : Boolean;
+
       procedure Junk_Declaration;
       --  Procedure called to handle error of declaration encountered in
       --  statement sequence.
@@ -314,9 +317,9 @@ package body Ch5 is
                       and then Prev_Token /= Tok_Case
                       and then Prev_Token /= Tok_Delay
                       and then Prev_Token /= Tok_If
+                      and then Prev_Token /= Tok_Right_Curly
                       and then Prev_Token /= Tok_Elsif
                       and then Prev_Token /= Tok_Return
-                      and then Prev_Token /= Tok_Right_Curly
                       and then Prev_Token /= Tok_When
                       and then Prev_Token /= Tok_While
                       and then Prev_Token /= Tok_Separate)
@@ -505,6 +508,71 @@ package body Ch5 is
                      Append_To (Statement_List,
                        P_Assignment_Statement (Id_Node));
                      Statement_Required := False;
+
+                  --  Handle ++, +1, and -1 cases
+
+                  elsif Token = Tok_Plus
+                    or else Token = Tok_Minus
+                  then
+                     Is_Plus_Plus := Token = Tok_Plus;
+
+                     Scan; --  past operator
+
+                     if not Is_Plus_Plus
+                       and then (Token /= Tok_Integer_Literal
+                                  and then Source (Token_Ptr) /= '1')
+                     then
+                        Error_Msg_SP -- CODEFIX
+                          ("missing 1 in -1");
+
+                     elsif Is_Plus_Plus
+                       and then Token /= Tok_Plus
+                       and then (Token /= Tok_Integer_Literal
+                                  and then Source (Token_Ptr) /= '1')
+                     then
+                        Error_Msg_SP -- CODEFIX
+                          ("missing second + in ++");
+                     else
+                        Scan; --  past second plus or 1
+
+                        --  Ad hoc expansion for ++
+
+                        declare
+                           Assign_Node : Node_Id;
+                           Expr_Node   : Node_Id;
+                           Target_Node : Node_Id;
+                           One_Node    : Node_Id;
+
+                        begin
+                           One_Node := New_Node (N_Integer_Literal, Token_Ptr);
+                           Set_Intval (One_Node, Uintp.Uint_1);
+
+                           Target_Node := New_Node (N_Target_Name, Token_Ptr);
+
+                           if Is_Plus_Plus then
+                              Expr_Node := New_Node (N_Op_Add, Token_Ptr);
+                              Set_Chars (Expr_Node, Name_Op_Add);
+                           else
+                              Expr_Node := New_Node (N_Op_Subtract, Token_Ptr);
+                              Set_Chars (Expr_Node, Name_Op_Subtract);
+                           end if;
+
+                           Set_Left_Opnd (Expr_Node, Target_Node);
+                           Set_Right_Opnd (Expr_Node, One_Node);
+
+                           Assign_Node :=
+                             New_Node (N_Assignment_Statement, Prev_Token_Ptr);
+                           Current_Assign_Node := Assign_Node;
+                           Set_Name (Assign_Node, Id_Node);
+                           Set_Expression (Assign_Node, Expr_Node);
+                           Set_Has_Target_Names (Current_Assign_Node);
+                           Current_Assign_Node := Empty;
+
+                           Append_To (Statement_List, Assign_Node);
+                        end;
+                     end if;
+
+                     TF_Semicolon;
 
                   --  Check common case of procedure call, another case that
                   --  we want to speed up as much as possible.
@@ -1139,7 +1207,11 @@ package body Ch5 is
          Loc := Prev_Token_Ptr;
          Set_Condition (Elsif_Node, P_Condition);
          Check_Then_Column;
-         Then_Scan;
+         if Token = Tok_Colon then
+            Scan;
+         else
+            Then_Scan;
+         end if;
          Set_Then_Statements
            (Elsif_Node, P_Sequence_Of_Statements (SS_Eftm_Eltm_Sreq));
          Append (Elsif_Node, Elsif_Parts (If_Node));
@@ -1516,6 +1588,13 @@ package body Ch5 is
       end if;
 
       Append_Elmt (Loop_Node, Label_List);
+
+      --  Allow an optional left curly brace
+
+      if Token = Tok_Left_Curly then
+         Scan;
+      end if;
+
       Set_Statements (Loop_Node, P_Sequence_Of_Statements (SS_Sreq));
       End_Statements (Loop_Node);
       return Loop_Node;
@@ -2313,7 +2392,7 @@ package body Ch5 is
    begin
       TF_Then;
 
-      while Token = Tok_Then loop
+      while Token = Tok_Then or else Token = Tok_Left_Curly loop
          Error_Msg_SC -- CODEFIX
            ("redundant THEN");
          TF_Then;
@@ -2333,7 +2412,7 @@ package body Ch5 is
          Discard_Junk_Node (P_Expression);
       end if;
 
-      if Token = Tok_Then then
+      if Token = Tok_Then or Token = Tok_Left_Curly then
          Scan;
       end if;
    end Then_Scan;

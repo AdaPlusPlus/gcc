@@ -30,6 +30,8 @@ pragma Style_Checks (All_Checks);
 with Fname.UF; use Fname.UF;
 with Uname;    use Uname;
 
+pragma Warnings (Off);
+
 separate (Par)
 package body Ch10 is
 
@@ -835,6 +837,7 @@ package body Ch10 is
       --  Loop through context items
 
       loop
+         With_Node           := Empty;
          Implicit_Use_Expand := False;
          if Style_Check then
             Style.Check_Indentation;
@@ -955,12 +958,6 @@ package body Ch10 is
                   Set_Limited_Present (With_Node, Has_Limited);
                   Set_Private_Present (With_Node, Has_Private);
 
-                  --  Mark the ad hoc expansion
-
-                  if Expanding_Implicit then
-                     Set_Implicit_With (With_Node);
-                  end if;
-
                   First_Flag := False;
 
                   --  All done if no comma
@@ -994,7 +991,10 @@ package body Ch10 is
 
             --  Processing for USE clause
 
-            if Token = Tok_Use then
+            if (No (With_Node)
+                 or else Implicit_Use_Expand)
+              and then Token = Tok_Use
+            then
                Expanding_Implicit := False;
                P_Use_Clause (Item_List);
             end if;

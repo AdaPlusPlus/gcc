@@ -1,5 +1,3 @@
-Temporary Modification: There is proof of the "Ask me anything" : )
-
 NOTE: There are currently no pre-packaged builds, you will have to build gcc to test.
 
 The Ada++ Programming Language

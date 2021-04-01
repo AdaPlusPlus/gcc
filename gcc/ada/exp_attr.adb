@@ -4513,15 +4513,13 @@ package body Exp_Attr is
 
       when Attribute_Mod => Mod_Case : declare
          Arg  : constant Node_Id := Relocate_Node (First (Exprs));
-         Hi   : constant Node_Id := Type_High_Bound (Base_Type (Etype (Arg)));
+         Hi   : constant Node_Id := Type_High_Bound (Etype (Arg));
          Modv : constant Uint    := Modulus (Btyp);
 
       begin
 
          --  This is not so simple. The issue is what type to use for the
-         --  computation of the modular value. In addition we need to use
-         --  the base type as above to retrieve a static bound for the
-         --  comparisons that follow.
+         --  computation of the modular value.
 
          --  The easy case is when the modulus value is within the bounds
          --  of the signed integer type of the argument. In this case we can

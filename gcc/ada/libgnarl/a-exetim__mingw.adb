@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---         Copyright (C) 2007-2019, Free Software Foundation, Inc.          --
+--         Copyright (C) 2007-2020, Free Software Foundation, Inc.          --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -107,7 +107,7 @@ is
       E_Time : aliased Long_Long_Integer;
       K_Time : aliased Long_Long_Integer;
       U_Time : aliased Long_Long_Integer;
-      Res    : BOOL;
+      Res    : System.Win32.BOOL;
 
    begin
       if T = Ada.Task_Identification.Null_Task_Id then

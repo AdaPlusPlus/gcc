@@ -810,19 +810,11 @@ package body Sem_Ch8 is
             --  that are used in iterators. This is an optimization, but it
             --  also prevents typing anomalies when the prefix is further
             --  expanded.
-
             --  Note that we cannot just use the Is_Limited_Record flag because
             --  it does not apply to records with limited components, for which
             --  this syntactic flag is not set, but whose size is also fixed.
 
-            --  Note also that we need to build the constrained subtype for an
-            --  array in order to make the bounds explicit in most cases, but
-            --  not if the object comes from an extended return statement, as
-            --  this would create dangling references to them later on.
-
-            elsif Is_Limited_Type (Typ)
-              and then (not Is_Array_Type (Typ) or else Is_Return_Object (Id))
-            then
+            elsif Is_Limited_Type (Typ) then
                null;
 
             else
@@ -6397,22 +6389,22 @@ package body Sem_Ch8 is
                --  If this is a selection from Ada, System or Interfaces, then
                --  we assume a missing with for the corresponding package.
 
-               if Is_Known_Unit (N)
-                 and then not (Present (Entity (Prefix (N)))
-                                and then Scope (Entity (Prefix (N))) /=
-                                           Standard_Standard)
-               then
-                  if not Error_Posted (N) then
-                     Error_Msg_Node_2 := Selector;
-                     Error_Msg_N -- CODEFIX
-                       ("missing `WITH &.&;`", Prefix (N));
-                  end if;
+               --  if Is_Known_Unit (N)
+               --  and then not (Present (Entity (Prefix (N)))
+               --                 and then Scope (Entity (Prefix (N))) /=
+               --                            Standard_Standard)
+               --  then
+               --   if not Error_Posted (N) then
+               --      Error_Msg_Node_2 := Selector;
+               --      Error_Msg_N -- CODEFIX
+               --        ("missing `WITH &.&;`", Prefix (N));
+               --   end if;
 
                --  If this is a selection from a dummy package, then suppress
                --  the error message, of course the entity is missing if the
                --  package is missing.
 
-               elsif Sloc (Error_Msg_Node_2) = No_Location then
+               if Sloc (Error_Msg_Node_2) = No_Location then
                   null;
 
                --  Here we have the case of an undefined component

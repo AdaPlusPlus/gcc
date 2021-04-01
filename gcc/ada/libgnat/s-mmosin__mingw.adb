@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                     Copyright (C) 2007-2019, AdaCore                     --
+--                     Copyright (C) 2007-2020, AdaCore                     --
 --                                                                          --
 -- This library is free software;  you can redistribute it and/or modify it --
 -- under terms of the  GNU General Public License  as published by the Free --
@@ -193,7 +193,7 @@ package body System.Mmap.OS_Interface is
    -----------
 
    procedure Close (File : in out System_File) is
-      Ignored : BOOL;
+      Ignored : Win.BOOL;
       pragma Unreferenced (Ignored);
    begin
       Ignored := CloseHandle (File.Mapping_Handle);
@@ -314,7 +314,7 @@ package body System.Mmap.OS_Interface is
    procedure Dispose_Mapping
      (Mapping : in out System_Mapping)
    is
-      Ignored : BOOL;
+      Ignored : Win.BOOL;
       pragma Unreferenced (Ignored);
    begin
       Ignored := Win.UnmapViewOfFile (Mapping.Address);

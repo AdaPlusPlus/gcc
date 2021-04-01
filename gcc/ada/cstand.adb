@@ -631,7 +631,6 @@ package body CStand is
       --  Create type/subtype declaration nodes for standard types
 
       for S in S_Types loop
-
          --  Subtype declaration case
 
          if S = S_Natural

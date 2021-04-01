@@ -785,7 +785,7 @@ package body Tchk is
       Scan_State : Saved_Scan_State;
 
    begin
-      if Token = Tok_Then then
+      if Token = Tok_Then or Token = Tok_Left_Curly then
          Scan; -- past THEN and we are done
 
       else
@@ -803,7 +803,7 @@ package body Tchk is
 
             Scan; -- continue search
 
-            if Token = Tok_Then then
+            if Token = Tok_Then or Token = Tok_Left_Curly then
                Scan; -- past THEN
                return;
             end if;

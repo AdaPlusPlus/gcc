@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---         Copyright (C) 2009-2019, Free Software Foundation, Inc.          --
+--         Copyright (C) 2009-2020, Free Software Foundation, Inc.          --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -114,17 +114,17 @@ package System.Win32.Ext is
 
    function GetCommState
      (hFile : HANDLE;
-      lpDCB : access DCB) return BOOL;
+      lpDCB : access DCB) return Win32.BOOL;
    pragma Import (Stdcall, GetCommState, "GetCommState");
 
    function SetCommState
      (hFile : HANDLE;
-      lpDCB : access DCB) return BOOL;
+      lpDCB : access DCB) return Win32.BOOL;
    pragma Import (Stdcall, SetCommState, "SetCommState");
 
    function SetCommTimeouts
      (hFile          : HANDLE;
-      lpCommTimeouts : access COMMTIMEOUTS) return BOOL;
+      lpCommTimeouts : access COMMTIMEOUTS) return Win32.BOOL;
    pragma Import (Stdcall, SetCommTimeouts, "SetCommTimeouts");
 
 end System.Win32.Ext;

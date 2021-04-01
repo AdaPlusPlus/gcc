@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                    Copyright (C) 2007-2019, AdaCore                      --
+--                    Copyright (C) 2007-2020, AdaCore                      --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -65,7 +65,7 @@ package body GNAT.Serial_Communications is
    -----------
 
    procedure Close (Port : in out Serial_Port) is
-      Success : BOOL;
+      Success : Win32.BOOL;
 
    begin
       if Port.H /= -1 then
@@ -102,7 +102,7 @@ package body GNAT.Serial_Communications is
       Name : Port_Name)
    is
       C_Name  : constant String := String (Name) & ASCII.NUL;
-      Success : BOOL;
+      Success : Win32.BOOL;
       pragma Unreferenced (Success);
 
    begin
@@ -147,7 +147,7 @@ package body GNAT.Serial_Communications is
       Buffer : out Stream_Element_Array;
       Last   : out Stream_Element_Offset)
    is
-      Success   : BOOL;
+      Success   : Win32.BOOL;
       Read_Last : aliased DWORD;
 
    begin
@@ -187,7 +187,7 @@ package body GNAT.Serial_Communications is
    is
       pragma Unreferenced (Local);
 
-      Success      : BOOL;
+      Success      : Win32.BOOL;
       Com_Time_Out : aliased COMMTIMEOUTS;
       Com_Settings : aliased DCB;
 
@@ -289,7 +289,7 @@ package body GNAT.Serial_Communications is
      (Port   : in out Serial_Port;
       Buffer : Stream_Element_Array)
    is
-      Success   : BOOL;
+      Success   : Win32.BOOL;
       Temp_Last : aliased DWORD;
 
    begin
